@@ -20,7 +20,7 @@ Designed for personal AI toolchains: plug the local endpoint into [opencode](htt
 
 ## Features
 
-- **Web console** (`http://localhost:9000`): one-click model download with live progress, start/stop, container logs, real-time GPU stats (VRAM / utilization / temperature / power), and a built-in smoke test (chat + tool calling)
+- **Web console** (`http://localhost:9000`): one-click model download with live progress, start/stop, container logs, real-time GPU stats (VRAM / utilization / temperature / power), built-in chat panel and smoke test (chat + tool calling)
 - **One model at a time** by design — switching models is one click, the console stops the running one automatically (24GB VRAM can't hold two)
 - **Quantized-first model registry**: AWQ models tuned to fit 24GB, with per-model `max-model-len` budgets
 - **Tool calling ready**: Hermes parser + auto tool choice enabled out of the box, works with agentic coding tools
@@ -93,6 +93,50 @@ onegpu-llm/
 ## License
 
 [MIT](LICENSE)
+
+---
+
+## Appendix: environment setup from scratch
+
+Tested setup: Windows 11 + WSL2 (Ubuntu 22.04) + Docker Desktop, RTX 4090 24GB. Native Linux works too — skip the WSL parts.
+
+### 1. NVIDIA driver
+
+Install the latest **Windows** NVIDIA Game Ready / Studio driver. Nothing CUDA-related needs to be installed inside WSL — the driver is shared. Verify in WSL:
+
+```bash
+nvidia-smi    # should list your GPU
+```
+
+### 2. WSL2
+
+```powershell
+# in Windows PowerShell (admin)
+wsl --install -d Ubuntu-22.04
+```
+
+Already on WSL1? Convert with `wsl --set-version Ubuntu-22.04 2`.
+
+### 3. Docker Desktop
+
+1. Install [Docker Desktop for Windows](https://www.docker.com/products/docker-desktop/), keep the default **WSL2 backend**
+2. Settings → **Resources → WSL Integration** → enable your distro (e.g. Ubuntu-22.04)
+3. Optional but recommended — move Docker's data disk off the C: drive (the vLLM image alone is ~28GB): Settings → Resources → **Advanced → Disk image location**, pick a folder on another drive
+
+Verify in WSL:
+
+```bash
+docker version
+docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi   # GPU visible in container
+```
+
+### 4. Python
+
+The scripts and web console need Python ≥3.10 with `pip` (Ubuntu 22.04's `python3` works). First download auto-installs the `modelscope` CLI.
+
+### Disk layout
+
+Everything this project writes stays inside the workspace (weights, caches, logs) — the only large external consumer is Docker's image store, handled in step 3.3.
 
 ---
 

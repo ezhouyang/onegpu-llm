@@ -46,12 +46,33 @@
            font-size: 13px; display: none; z-index: 10; }
   .toast.error { background: #3d1d1f; border: 1px solid #f85149; display: block; }
   .toast.info { background: #1c2b4a; border: 1px solid #388bfd; display: block; }
+  #chat-panel { position: fixed; top: 0; right: -420px; width: 400px; height: 100vh;
+                background: #0f1115; border-left: 1px solid #23272f; display: flex;
+                flex-direction: column; transition: right .25s; z-index: 20; }
+  #chat-panel.open { right: 0; }
+  #chat-header { padding: 14px 16px; border-bottom: 1px solid #23272f; font-size: 14px;
+                 display: flex; justify-content: space-between; align-items: center; }
+  #chat-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex;
+                   flex-direction: column; gap: 12px; }
+  .msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 13px;
+         line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: #1f6feb; }
+  .msg.bot { align-self: flex-start; background: #21262d; }
+  .msg.bot details { margin-top: 6px; font-size: 12px; color: #9aa0aa; }
+  .msg.bot summary { cursor: pointer; }
+  .msg.bot details div { margin-top: 4px; padding-left: 8px; border-left: 2px solid #30363d; }
+  #chat-input-row { padding: 12px; border-top: 1px solid #23272f; display: flex; gap: 8px; }
+  #chat-input { flex: 1; background: #0a0c10; border: 1px solid #30363d; border-radius: 8px;
+                color: #e6e8eb; padding: 8px 12px; font-size: 13px; font-family: inherit;
+                resize: none; height: 40px; }
+  #chat-input:focus { outline: none; border-color: #1f6feb; }
 </style>
 </head>
 <body>
 <header>
   <h1><img src="/static/logo.svg" alt="logo" style="width:28px;height:28px;vertical-align:-6px;margin-right:8px;">onegpu-llm</h1>
   <div class="gpu-bar">
+    <button id="chat-toggle" onclick="toggleChat()">对话</button>
     <span id="gpu-name">GPU: --</span>
     <span>利用率 <b id="gpu-util">--</b>%</span>
     <span>显存 <b id="gpu-mem">--</b><span class="mem-track"><span class="mem-fill" id="gpu-mem-fill"></span></span></span>
@@ -70,6 +91,71 @@
   </div>
 </main>
 <div class="toast" id="toast"></div>
+
+<div id="chat-panel">
+  <div id="chat-header">
+    <span>对话测试</span>
+    <button onclick="toggleChat()">关闭</button>
+  </div>
+  <div id="chat-messages"></div>
+  <div id="chat-input-row">
+    <textarea id="chat-input" placeholder="输入消息，Enter 发送（Shift+Enter 换行）"
+      onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}"></textarea>
+    <button class="primary" onclick="sendChat()">发送</button>
+  </div>
+</div>
+
+<script>
+let chatHistory = [];
+
+function toggleChat() {
+  document.getElementById('chat-panel').classList.toggle('open');
+}
+
+function appendMsg(role, text, reasoning) {
+  const el = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.textContent = text;
+  if (reasoning) {
+    const d = document.createElement('details');
+    const s = document.createElement('summary');
+    s.textContent = '思考过程';
+    const inner = document.createElement('div');
+    inner.textContent = reasoning;
+    d.appendChild(s); d.appendChild(inner);
+    div.appendChild(d);
+  }
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  appendMsg('user', text);
+  chatHistory.push({ role: 'user', content: text });
+  const thinking = document.createElement('div');
+  thinking.className = 'msg bot';
+  thinking.textContent = '思考中...';
+  document.getElementById('chat-messages').appendChild(thinking);
+  try {
+    const data = await api('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: chatHistory }),
+    });
+    thinking.remove();
+    appendMsg('bot', data.content || '(空回复)', data.reasoning);
+    chatHistory.push({ role: 'assistant', content: data.content });
+  } catch (e) {
+    thinking.remove();
+    appendMsg('bot', '请求失败: ' + e.message);
+  }
+}
+</script>
 
 <script>
 let models = [];

@@ -162,6 +162,35 @@ def download_status(key: str):
     return {"status": status, "log": log_text}
 
 
+@app.post("/api/chat")
+def chat(payload: dict):
+    messages = payload.get("messages", [])
+    if not messages:
+        raise HTTPException(400, "messages required")
+    health = vllm_health()
+    if not health["ready"]:
+        raise HTTPException(503, "没有正在运行的模型，请先启动")
+    body = json.dumps({
+        "model": health["served"][0],
+        "messages": messages,
+        "max_tokens": 2048,
+    }).encode()
+    req = urllib.request.Request(
+        f"http://localhost:{VLLM_PORT}/v1/chat/completions",
+        data=body, headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        raise HTTPException(502, f"vLLM 请求失败: {e}")
+    msg = data["choices"][0]["message"]
+    return {
+        "content": (msg.get("content") or "").strip(),
+        "reasoning": (msg.get("reasoning") or "").strip(),
+    }
+
+
 @app.post("/api/test")
 def smoke_test():
     result = subprocess.run(
