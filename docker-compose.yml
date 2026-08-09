@@ -1,0 +1,76 @@
+x-vllm-base: &vllm-base
+  image: vllm/vllm-openai:latest
+  ipc: host
+  restart: unless-stopped
+  ports:
+    - "8000:8000"
+  volumes:
+    - ./models:/models
+    - ./logs:/logs
+  environment:
+    - HF_HUB_OFFLINE=1
+    - VLLM_LOGGING_LEVEL=INFO
+    - VLLM_USE_V2_MODEL_RUNNER=0  # V2 runner 需要 UVA，WSL2 不支持，回退 V1
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+  logging:
+    driver: json-file
+    options:
+      max-size: "50m"
+      max-file: "3"
+
+services:
+  qwen3-14b:
+    <<: *vllm-base
+    container_name: vllm-qwen3-14b
+    profiles: ["qwen3-14b"]
+    command: >
+      --model /models/Qwen/Qwen3-14B-AWQ
+      --served-model-name qwen3-14b
+      --max-model-len 32768
+      --gpu-memory-utilization 0.92
+      --reasoning-parser deepseek_r1
+      --tool-call-parser hermes
+      --enable-auto-tool-choice
+
+  qwen3-32b:
+    <<: *vllm-base
+    container_name: vllm-qwen3-32b
+    profiles: ["qwen3-32b"]
+    command: >
+      --model /models/Qwen/Qwen3-32B-AWQ
+      --served-model-name qwen3-32b
+      --max-model-len 8192
+      --gpu-memory-utilization 0.92
+      --reasoning-parser deepseek_r1
+      --tool-call-parser hermes
+      --enable-auto-tool-choice
+
+  qwen3-30b-a3b:
+    <<: *vllm-base
+    container_name: vllm-qwen3-30b-a3b
+    profiles: ["qwen3-30b-a3b"]
+    command: >
+      --model /models/Qwen/Qwen3-30B-A3B-Instruct-2507-AWQ
+      --served-model-name qwen3-30b-a3b
+      --max-model-len 16384
+      --gpu-memory-utilization 0.92
+      --tool-call-parser hermes
+      --enable-auto-tool-choice
+
+  qwen25-coder-32b:
+    <<: *vllm-base
+    container_name: vllm-qwen25-coder-32b
+    profiles: ["qwen25-coder-32b"]
+    command: >
+      --model /models/Qwen/Qwen2.5-Coder-32B-Instruct-AWQ
+      --served-model-name qwen25-coder-32b
+      --max-model-len 8192
+      --gpu-memory-utilization 0.92
+      --tool-call-parser hermes
+      --enable-auto-tool-choice

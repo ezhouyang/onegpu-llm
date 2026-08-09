@@ -1,0 +1,112 @@
+<div align="center">
+  <img src="ui/static/logo.svg" width="96" alt="onegpu-llm logo">
+  <h1>onegpu-llm</h1>
+  <p>Run open-source LLMs on a single consumer GPU — with a web console to manage everything.</p>
+  <p>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+    <img src="https://img.shields.io/badge/engine-vLLM-green.svg" alt="Engine: vLLM">
+    <img src="https://img.shields.io/badge/gpu-24GB%20VRAM-orange.svg" alt="GPU: 24GB VRAM">
+  </p>
+  <p><a href="#中文说明">中文说明</a></p>
+</div>
+
+---
+
+## What is this?
+
+A batteries-included workspace for deploying open-source LLMs (Qwen, Gemma, …) on a **single 24GB GPU** (tested on RTX 4090, WSL2 + Docker Desktop). Inference is served by **vLLM** with an OpenAI-compatible API, and a lightweight **web console** handles model download, start/stop switching, logs, and GPU monitoring.
+
+Designed for personal AI toolchains: plug the local endpoint into [opencode](https://opencode.ai), Cline, Continue, or any OpenAI-compatible client.
+
+## Features
+
+- **Web console** (`http://localhost:9000`): one-click model download with live progress, start/stop, container logs, real-time GPU stats (VRAM / utilization / temperature / power), and a built-in smoke test (chat + tool calling)
+- **One model at a time** by design — switching models is one click, the console stops the running one automatically (24GB VRAM can't hold two)
+- **Quantized-first model registry**: AWQ models tuned to fit 24GB, with per-model `max-model-len` budgets
+- **Tool calling ready**: Hermes parser + auto tool choice enabled out of the box, works with agentic coding tools
+- **Everything stays in the workspace**: weights, caches, logs — nothing leaks into `$HOME` or other drives
+
+## Quick start
+
+Prerequisites: NVIDIA GPU (≥24GB recommended), Docker with GPU support (Docker Desktop + WSL2 works), Python 3.10+.
+
+```bash
+git clone https://github.com/<you>/onegpu-llm.git
+cd onegpu-llm
+
+./scripts/download.sh qwen3-14b       # download weights via ModelScope (fast in CN)
+docker compose --profile qwen3-14b up -d
+./scripts/test.sh                     # smoke test: chat + tool calling
+```
+
+Then start the console:
+
+```bash
+./scripts/ui.sh        # http://localhost:9000
+```
+
+The OpenAI-compatible API listens on `http://localhost:8000/v1`.
+
+## Model registry
+
+| Profile | Model | Use case | VRAM (weights) | max-model-len |
+|---|---|---|---|---|
+| `qwen3-14b` | Qwen/Qwen3-14B-AWQ | daily driver, Chinese chat/RAG | ~9GB | 32768 |
+| `qwen3-32b` | Qwen/Qwen3-32B-AWQ | best single-GPU quality (slow, tight context) | ~19GB | 8192 |
+| `qwen3-30b-a3b` | Qwen/Qwen3-30B-A3B-Instruct-2507-AWQ | MoE, fast + near-32B quality | ~17GB | 16384 |
+| `qwen25-coder-32b` | Qwen/Qwen2.5-Coder-32B-Instruct-AWQ | coding agent backend | ~19GB | 8192 |
+
+Adding a model = one line in `scripts/download.sh` + one service block in `docker-compose.yml`. Gemma 3 and other open models planned.
+
+## opencode integration
+
+```json
+{
+  "provider": {
+    "onegpu": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://localhost:8000/v1" },
+      "models": { "qwen3-14b": {} }
+    }
+  }
+}
+```
+
+## Project layout
+
+```
+onegpu-llm/
+├── docker-compose.yml     # model services, one profile per model
+├── models/                # weights (git-ignored)
+├── scripts/               # download.sh / test.sh / ui.sh
+├── ui/                    # web console (FastAPI + single-page, no build step)
+├── .cache/                # modelscope/pip caches (git-ignored)
+└── logs/                  # server & download logs (git-ignored)
+```
+
+## Notes
+
+- WSL2 users: vLLM ≥0.25 V2 model runner requires UVA which WSL2 lacks; this repo sets `VLLM_USE_V2_MODEL_RUNNER=0` already
+- Qwen3 thinking mode: append `/no_think` to prompts if you want direct answers
+- See `CLAUDE.md` for the full operating conventions (VRAM budgets, adding models, red lines)
+
+## License
+
+[MIT](LICENSE)
+
+---
+
+## 中文说明
+
+在单张 24GB 消费级显卡（RTX 4090 实测，WSL2 + Docker Desktop）上部署开源大模型的一站式工作空间。vLLM 提供 OpenAI 兼容 API，自带 Web 管理台：模型下载（含实时进度）、一键启停切换、容器日志、GPU 实时监控、冒烟测试（对话 + 工具调用）。
+
+快速开始：
+
+```bash
+./scripts/download.sh qwen3-14b          # 下载模型（ModelScope，国内速度快）
+docker compose --profile qwen3-14b up -d # 启动服务
+./scripts/ui.sh                          # 管理台 http://localhost:9000
+./scripts/test.sh                        # 冒烟测试
+```
+
+API 地址 `http://localhost:8000/v1`，可直接接入 opencode / Cline / Continue 等工具。设计约束与运维约定见 `CLAUDE.md`。

@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>onegpu-llm</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: #0f1115; color: #e6e8eb; min-height: 100vh; }
+  header { padding: 20px 32px; border-bottom: 1px solid #23272f; display: flex;
+           align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 18px; font-weight: 600; }
+  .gpu-bar { display: flex; gap: 20px; font-size: 13px; color: #9aa0aa; }
+  .gpu-bar b { color: #e6e8eb; font-weight: 600; }
+  .mem-track { width: 160px; height: 6px; background: #23272f; border-radius: 3px;
+               display: inline-block; vertical-align: middle; margin-left: 6px; overflow: hidden; }
+  .mem-fill { height: 100%; background: #4f8cff; border-radius: 3px; transition: width .5s; }
+  main { padding: 24px 32px; max-width: 1200px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 16px; }
+  .card { background: #171a21; border: 1px solid #23272f; border-radius: 10px; padding: 18px; }
+  .card.running { border-color: #2ea043; }
+  .card h2 { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .card .model-id { font-size: 12px; color: #9aa0aa; margin: 6px 0 12px; word-break: break-all; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 500; }
+  .badge.green { background: rgba(46,160,67,.15); color: #3fb950; }
+  .badge.gray { background: #23272f; color: #9aa0aa; }
+  .badge.yellow { background: rgba(210,153,34,.15); color: #d29922; }
+  .actions { display: flex; gap: 8px; }
+  button { font-size: 13px; padding: 6px 14px; border-radius: 6px; border: 1px solid #30363d;
+           background: #21262d; color: #e6e8eb; cursor: pointer; }
+  button:hover { background: #2d333b; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; }
+  button.primary:hover { background: #388bfd; }
+  button.danger { color: #f85149; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  #log-panel { margin-top: 24px; background: #0a0c10; border: 1px solid #23272f;
+               border-radius: 10px; display: none; }
+  #log-panel.open { display: block; }
+  #log-header { padding: 10px 16px; border-bottom: 1px solid #23272f; font-size: 13px;
+                display: flex; justify-content: space-between; align-items: center; }
+  #log-content { padding: 12px 16px; font-family: "JetBrains Mono", Consolas, monospace;
+                 font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all;
+                 max-height: 400px; overflow-y: auto; color: #b8bec7; }
+  .toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 18px; border-radius: 8px;
+           font-size: 13px; display: none; z-index: 10; }
+  .toast.error { background: #3d1d1f; border: 1px solid #f85149; display: block; }
+  .toast.info { background: #1c2b4a; border: 1px solid #388bfd; display: block; }
+</style>
+</head>
+<body>
+<header>
+  <h1><img src="/static/logo.svg" alt="logo" style="width:28px;height:28px;vertical-align:-6px;margin-right:8px;">onegpu-llm</h1>
+  <div class="gpu-bar">
+    <span id="gpu-name">GPU: --</span>
+    <span>利用率 <b id="gpu-util">--</b>%</span>
+    <span>显存 <b id="gpu-mem">--</b><span class="mem-track"><span class="mem-fill" id="gpu-mem-fill"></span></span></span>
+    <span>温度 <b id="gpu-temp">--</b>°C</span>
+    <span>功耗 <b id="gpu-power">--</b>W</span>
+  </div>
+</header>
+<main>
+  <div class="grid" id="models"></div>
+  <div id="log-panel">
+    <div id="log-header">
+      <span id="log-title">日志</span>
+      <button onclick="closeLogs()">关闭</button>
+    </div>
+    <div id="log-content"></div>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+let models = [];
+let logTimer = null;
+let currentLogKey = null;
+
+function toast(msg, isError = false) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + (isError ? 'error' : 'info');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.className = 'toast', 4000);
+}
+
+async function api(path, opts) {
+  const resp = await fetch(path, opts);
+  if (!resp.ok) {
+    let detail = resp.statusText;
+    try { detail = (await resp.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  return resp.json();
+}
+
+async function refreshModels() {
+  try {
+    const data = await api('/api/models');
+    models = data.models;
+    render();
+  } catch (e) { /* docker 暂时不可用时静默 */ }
+}
+
+async function refreshGpu() {
+  try {
+    const g = await api('/api/gpu');
+    document.getElementById('gpu-name').textContent = 'GPU: ' + g.name;
+    document.getElementById('gpu-util').textContent = g.utilization;
+    document.getElementById('gpu-mem').textContent =
+      (g.memory_used / 1024).toFixed(1) + ' / ' + (g.memory_total / 1024).toFixed(0) + ' GB';
+    document.getElementById('gpu-mem-fill').style.width = (g.memory_used / g.memory_total * 100) + '%';
+    document.getElementById('gpu-temp').textContent = g.temperature;
+    document.getElementById('gpu-power').textContent = g.power.toFixed(0);
+  } catch (e) {}
+}
+
+function statusBadge(m) {
+  if (m.api_ready) return '<span class="badge green">API 就绪</span>';
+  if (m.running) return '<span class="badge yellow">启动中</span>';
+  if (m.downloading) return '<span class="badge yellow">下载中</span>';
+  if (m.downloaded) return '<span class="badge gray">已下载 · 未运行</span>';
+  return '<span class="badge gray">未下载</span>';
+}
+
+function render() {
+  const el = document.getElementById('models');
+  el.innerHTML = models.map(m => `
+    <div class="card ${m.running ? 'running' : ''}">
+      <h2>${m.key} ${statusBadge(m)}</h2>
+      <div class="model-id">${m.model_id || '(未配置模型路径)'}</div>
+      <div class="actions">
+        ${m.running
+          ? `<button class="danger" onclick="stopModel('${m.key}')">停止</button>`
+          : `<button class="primary" onclick="startModel('${m.key}')" ${m.downloaded ? '' : 'disabled title="先下载权重"'}>启动</button>`}
+        ${!m.downloaded && !m.running
+          ? (m.downloading
+            ? `<button onclick="showDownloadLog('${m.key}')">下载进度</button>`
+            : `<button onclick="downloadModel('${m.key}')">下载</button>`)
+          : ''}
+        <button onclick="showLogs('${m.key}')" ${m.running ? '' : 'disabled'}>日志</button>
+        ${m.api_ready ? `<button onclick="testApi()">冒烟测试</button>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function downloadModel(key) {
+  toast(`开始下载 ${key}，权重在后台下载到 models/ 目录`);
+  try {
+    await api(`/api/models/${key}/download`, { method: 'POST' });
+    showDownloadLog(key);
+  } catch (e) { toast('下载启动失败: ' + e.message, true); }
+  refreshModels();
+}
+
+function showDownloadLog(key) {
+  document.getElementById('log-title').textContent = `下载进度: ${key}`;
+  document.getElementById('log-panel').classList.add('open');
+  clearInterval(logTimer);
+  const tick = async () => {
+    try {
+      const data = await api(`/api/models/${key}/download-status`);
+      const el = document.getElementById('log-content');
+      el.textContent = data.log || '(等待输出...)';
+      el.scrollTop = el.scrollHeight;
+      if (data.status === 'done') {
+        toast('下载完成');
+        clearInterval(logTimer);
+        refreshModels();
+      } else if (data.status === 'failed') {
+        toast('下载失败，见日志', true);
+        clearInterval(logTimer);
+      }
+    } catch (e) {}
+  };
+  tick();
+  logTimer = setInterval(tick, 3000);
+}
+
+async function startModel(key) {
+  toast(`正在启动 ${key}，首次需拉取镜像/加载权重，请耐心等日志...`);
+  try {
+    await api(`/api/models/${key}/start`, { method: 'POST' });
+    toast(`${key} 容器已启动，等待 vLLM 加载完成`);
+    showLogs(key);
+  } catch (e) { toast('启动失败: ' + e.message, true); }
+  refreshModels();
+}
+
+async function stopModel(key) {
+  try {
+    await api(`/api/models/${key}/stop`, { method: 'POST' });
+    toast(`${key} 已停止`);
+    if (currentLogKey === key) closeLogs();
+  } catch (e) { toast('停止失败: ' + e.message, true); }
+  refreshModels();
+}
+
+function showLogs(key) {
+  currentLogKey = key;
+  document.getElementById('log-title').textContent = `日志: ${key}`;
+  document.getElementById('log-panel').classList.add('open');
+  const tick = async () => {
+    if (currentLogKey !== key) return;
+    try {
+      const data = await api(`/api/models/${key}/logs?tail=100`);
+      const el = document.getElementById('log-content');
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+      el.textContent = data.logs;
+      if (atBottom) el.scrollTop = el.scrollHeight;
+    } catch (e) {}
+  };
+  tick();
+  clearInterval(logTimer);
+  logTimer = setInterval(tick, 3000);
+}
+
+function closeLogs() {
+  currentLogKey = null;
+  clearInterval(logTimer);
+  document.getElementById('log-panel').classList.remove('open');
+}
+
+async function testApi() {
+  toast('运行冒烟测试（对话 + 工具调用）...');
+  try {
+    const data = await api('/api/test', { method: 'POST' });
+    if (data.ok) toast('冒烟测试通过');
+    else toast('冒烟测试失败: ' + data.output.slice(-300), true);
+  } catch (e) { toast('测试失败: ' + e.message, true); }
+}
+
+refreshModels();
+refreshGpu();
+setInterval(refreshModels, 5000);
+setInterval(refreshGpu, 3000);
+</script>
+</body>
+</html>
