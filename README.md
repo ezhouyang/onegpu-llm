@@ -31,7 +31,7 @@ Designed for personal AI toolchains: plug the local endpoint into [opencode](htt
 Prerequisites: NVIDIA GPU (≥24GB recommended), Docker with GPU support (Docker Desktop + WSL2 works), Python 3.10+.
 
 ```bash
-git clone https://github.com/<you>/onegpu-llm.git
+git clone https://github.com/ezhouyang/onegpu-llm.git
 cd onegpu-llm
 
 ./scripts/download.sh qwen3-14b       # download weights via ModelScope (fast in CN)
