@@ -34,7 +34,7 @@ llm-deploy/
 - 模型权重：`models/<org>/<name>/`（D 盘工作空间内）
 - 各类缓存：`.cache/modelscope`、`.cache/pip`、`.cache/tmp`（工作空间内，由脚本设置 `MODELSCOPE_CACHE` / `PIP_CACHE_DIR` / `TMPDIR`）
 - 下载/运行日志：`logs/`（工作空间内）
-- Docker 镜像与容器层：Docker Desktop 数据盘已迁至 `D:\docker\docker_datas`（settings-store.json 的 `CustomWslDistroDir`），无需再动
+- Docker 镜像与容器层：建议将 Docker Desktop 数据盘迁出 C 盘（settings-store.json 的 `CustomWslDistroDir` 指向其他盘），vLLM 镜像约 28GB
 - 新增任何会写盘的工具，先把缓存/数据目录指到工作空间，再使用
 
 ## 硬性约束（由 24GB 显存决定）
