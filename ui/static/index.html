@@ -30,7 +30,23 @@
   .badge.green { background: rgba(46,160,67,.15); color: #3fb950; }
   .badge.gray { background: #23272f; color: #9aa0aa; }
   .badge.yellow { background: rgba(210,153,34,.15); color: #d29922; }
-  .actions { display: flex; gap: 8px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  @media (max-width: 768px) {
+    header { padding: 14px 16px; }
+    h1 { font-size: 16px; }
+    .gpu-bar { gap: 12px; font-size: 12px; width: 100%; }
+    .mem-track { width: 90px; }
+    main { padding: 16px; }
+    .grid { grid-template-columns: 1fr; }
+    #chat-panel { width: 100vw !important; right: -100vw; border-left: none; }
+    #chat-resize { display: none; }
+    .modal { padding: 16px; }
+    .actions button { font-size: 12px; padding: 5px 10px; }
+  }
+  @media (min-width: 769px) and (max-width: 1200px) {
+    .grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+    #chat-panel { max-width: 60vw; }
+  }
   button { font-size: 13px; padding: 6px 14px; border-radius: 6px; border: 1px solid #30363d;
            background: #21262d; color: #e6e8eb; cursor: pointer; }
   button:hover { background: #2d333b; }
