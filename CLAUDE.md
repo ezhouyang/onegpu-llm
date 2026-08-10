@@ -2,6 +2,12 @@
 
 本地 GPU（RTX 4090 24GB, WSL2）上的开源大模型部署工作空间。推理引擎统一用 **vLLM**（Docker 镜像 `vllm/vllm-openai`），对外提供 OpenAI 兼容 API，供 opencode 等工具接入。
 
+## 变更与进度管理
+
+- `CHANGELOG.md`：所有功能变更、修复必须登记（分类 Added/Changed/Fixed），提交前更新
+- `ROADMAP.md`：待办按 P0/P1/P2 分级，完成一项移入 CHANGELOG；新想法先记这里再排期
+- 版本号约定：功能批次升 minor（0.x.0），修复升 patch
+
 ## 目录约定
 
 ```
