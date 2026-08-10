@@ -20,6 +20,7 @@ llm-deploy/
 │   ├── static/index.html  # 前端：模型卡片 + 下载/启停 + 日志 + GPU 监控
 │   └── requirements.txt
 ├── .cache/                # modelscope/pip/tmp 缓存，不进 git
+├── chats/                 # 对话记录（每对话一个 JSON），不进 git
 └── logs/                  # vLLM 及下载日志，不进 git
 ```
 
@@ -29,6 +30,8 @@ llm-deploy/
 - 依赖装在 `ui/.venv`，不污染全局 Python 环境
 - 后端只做薄封装：模型信息以 `docker-compose.yml` 为唯一数据源（解析 profiles 和 command），不在 ui 里维护重复配置
 - 对话面板：模型选择默认当前运行模型；联网搜索用 DuckDuckGo（`ddgs` 包，免费无 Key），搜索结果注入 system prompt 让模型引用；图片附件以 base64 走 OpenAI 多模态格式，仅多模态模型可用
+- 对话走 SSE 流式（`/api/chat/stream`），记录 TTFT/tok/s 等指标随消息保存，供模型间比较
+- 对话记录持久化在 `chats/`（每对话一个 JSON），不进 git
 - vLLM 编译缓存挂载在 `./.cache/vllm`，不要删（删了重启会重新编译，变慢）
 
 ## 存储位置约定（全部避开 C 盘）

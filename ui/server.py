@@ -8,12 +8,13 @@ from pathlib import Path
 
 import yaml
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = ROOT / "docker-compose.yml"
 MODELS_DIR = ROOT / "models"
+CHATS_DIR = ROOT / "chats"
 VLLM_PORT = 8000
 
 app = FastAPI(title="llm-deploy manager")
@@ -184,8 +185,7 @@ def extract_text(content) -> str:
     return ""
 
 
-@app.post("/api/chat")
-def chat(payload: dict):
+def build_chat_request(payload: dict) -> tuple[str, list, list]:
     messages = payload.get("messages", [])
     if not messages:
         raise HTTPException(400, "messages required")
@@ -214,7 +214,52 @@ def chat(payload: dict):
             "如果搜索结果与问题无关，直接忽略它们，也不要列出参考来源。\n\n" + context
         )
     messages = [{"role": "system", "content": "\n\n".join(system_parts)}] + messages
+    return model, messages, search_results
 
+
+def slim_results(results: list[dict]) -> list[dict]:
+    return [
+        {"title": r.get("title", ""), "body": r.get("body", ""), "href": r.get("href", "")}
+        for r in results
+    ]
+
+
+@app.post("/api/chat/stream")
+def chat_stream(payload: dict):
+    def gen():
+        try:
+            model, messages, search_results = build_chat_request(payload)
+        except HTTPException as e:
+            yield f"data: {json.dumps({'error': str(e.detail)})}\n\n"
+            return
+        if search_results:
+            yield f"data: {json.dumps({'search_results': slim_results(search_results)}, ensure_ascii=False)}\n\n"
+        body = json.dumps({
+            "model": model,
+            "messages": messages,
+            "max_tokens": 2048,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }).encode()
+        req = urllib.request.Request(
+            f"http://localhost:{VLLM_PORT}/v1/chat/completions",
+            data=body, headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if line.startswith("data:"):
+                        yield line + "\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': f'vLLM 请求失败: {e}'}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@app.post("/api/chat")
+def chat(payload: dict):
+    model, messages, search_results = build_chat_request(payload)
     body = json.dumps({
         "model": model,
         "messages": messages,
@@ -233,11 +278,60 @@ def chat(payload: dict):
     return {
         "content": (msg.get("content") or "").strip(),
         "reasoning": (msg.get("reasoning") or "").strip(),
-        "search_results": [
-            {"title": r.get("title", ""), "body": r.get("body", ""), "href": r.get("href", "")}
-            for r in search_results
-        ],
+        "search_results": slim_results(search_results),
     }
+
+
+CHATS_DIR.mkdir(exist_ok=True)
+
+
+@app.get("/api/chats")
+def list_chats():
+    chats = []
+    for f in sorted(CHATS_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            d = json.loads(f.read_text(errors="replace"))
+            chats.append({
+                "id": d.get("id", f.stem),
+                "title": d.get("title", f.stem),
+                "updated": d.get("updated", 0),
+                "model": d.get("model", ""),
+            })
+        except Exception:
+            continue
+    return {"chats": chats}
+
+
+@app.get("/api/chats/{chat_id}")
+def get_chat(chat_id: str):
+    path = CHATS_DIR / f"{chat_id}.json"
+    if not path.is_file():
+        raise HTTPException(404, "chat not found")
+    return json.loads(path.read_text(errors="replace"))
+
+
+@app.post("/api/chats")
+def save_chat(payload: dict):
+    chat_id = payload.get("id") or datetime.now().strftime("%Y%m%d-%H%M%S")
+    messages = payload.get("messages", [])
+    title = payload.get("title") or next(
+        (extract_text(m.get("content", ""))[:30] for m in messages if m.get("role") == "user"),
+        "新对话",
+    )
+    model = next(
+        (m.get("metrics", {}).get("model", "") for m in reversed(messages)
+         if m.get("role") == "assistant" and m.get("metrics")),
+        "",
+    )
+    record = {
+        "id": chat_id,
+        "title": title,
+        "model": model,
+        "updated": time.time(),
+        "messages": messages,
+    }
+    (CHATS_DIR / f"{chat_id}.json").write_text(json.dumps(record, ensure_ascii=False, indent=2))
+    return {"id": chat_id, "title": title}
 
 
 @app.post("/api/test")

@@ -50,7 +50,7 @@
            font-size: 13px; display: none; z-index: 10; }
   .toast.error { background: #3d1d1f; border: 1px solid #f85149; display: block; }
   .toast.info { background: #1c2b4a; border: 1px solid #388bfd; display: block; }
-  #chat-panel { position: fixed; top: 0; right: -420px; width: 400px; height: 100vh;
+  #chat-panel { position: fixed; top: 0; right: -820px; width: 480px; height: 100vh;
                 background: #0f1115; border-left: 1px solid #23272f; display: flex;
                 flex-direction: column; transition: right .25s; z-index: 20; }
   #chat-panel.open { right: 0; }
@@ -66,9 +66,16 @@
   .msg.bot summary { cursor: pointer; }
   .msg.bot details div { margin-top: 4px; padding-left: 8px; border-left: 2px solid #30363d; }
   .search-item { margin: 6px 0; font-size: 12px; }
-  .search-item a { color: #58a6ff; text-decoration: none; }
+  .search-item a { color: #a5d6ff; text-decoration: none; }
   .search-item a:hover { text-decoration: underline; }
   .search-item .snippet { color: #9aa0aa; margin-top: 2px; }
+  .metrics { margin-top: 8px; font-size: 11px; color: #6e7681; }
+  #chat-resize { position: absolute; left: 0; top: 0; bottom: 0; width: 6px;
+                 cursor: ew-resize; z-index: 21; }
+  #chat-resize:hover { background: rgba(88,166,255,.3); }
+  #chat-header select { background: #0a0c10; border: 1px solid #30363d; border-radius: 6px;
+                        color: #e6e8eb; font-size: 12px; padding: 4px 8px; max-width: 180px; }
+  details.live > summary { color: #8b949e; }
   .msg img.att { max-width: 100%; border-radius: 8px; margin-top: 6px; display: block; }
   .msg pre { background: #0a0c10; border: 1px solid #23272f; border-radius: 8px;
              padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
@@ -117,8 +124,10 @@
 <div class="toast" id="toast"></div>
 
 <div id="chat-panel">
+  <div id="chat-resize"></div>
   <div id="chat-header">
-    <span>对话测试</span>
+    <select id="chat-list" onchange="loadChat(this.value)"><option value="">当前对话</option></select>
+    <button onclick="newChat()">新建对话</button>
     <button onclick="toggleChat()">关闭</button>
   </div>
   <div id="chat-messages"></div>
@@ -141,10 +150,33 @@
 <script>
 let chatHistory = [];
 let attachments = [];
+let currentChatId = null;
 
 function toggleChat() {
   document.getElementById('chat-panel').classList.toggle('open');
 }
+
+// ---- 面板宽度拖拽 ----
+(function() {
+  const panel = document.getElementById('chat-panel');
+  const handle = document.getElementById('chat-resize');
+  const saved = localStorage.getItem('chatWidth');
+  if (saved) panel.style.width = saved + 'px';
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    const move = ev => {
+      const w = Math.min(900, Math.max(340, window.innerWidth - ev.clientX));
+      panel.style.width = w + 'px';
+    };
+    const up = () => {
+      localStorage.setItem('chatWidth', parseInt(panel.style.width));
+      document.removeEventListener('mousemove', move);
+      document.removeEventListener('mouseup', up);
+    };
+    document.addEventListener('mousemove', move);
+    document.addEventListener('mouseup', up);
+  });
+})();
 
 function renderMd(text) {
   if (window.marked && window.DOMPurify) {
@@ -159,47 +191,83 @@ function renderMd(text) {
   return div;
 }
 
-function appendMsg(role, text, reasoning, images = [], searchResults = []) {
+function makeDetails(cls, summaryText, open = false) {
+  const d = document.createElement('details');
+  d.className = 'live ' + cls;
+  d.open = open;
+  const s = document.createElement('summary');
+  s.textContent = summaryText;
+  d.appendChild(s);
+  return d;
+}
+
+function fillSearchBlock(det, results) {
+  det.querySelectorAll('.search-item').forEach(n => n.remove());
+  det.querySelector('summary').textContent = `搜索到 ${results.length} 条结果`;
+  results.forEach((r, i) => {
+    const item = document.createElement('div');
+    item.className = 'search-item';
+    const link = document.createElement('a');
+    link.href = r.href; link.target = '_blank'; link.rel = 'noopener';
+    link.textContent = `[${i+1}] ${r.title || r.href}`;
+    const snippet = document.createElement('div');
+    snippet.className = 'snippet';
+    snippet.textContent = (r.body || '').slice(0, 150);
+    item.appendChild(link); item.appendChild(snippet);
+    det.appendChild(item);
+  });
+}
+
+function metricsText(m) {
+  if (!m) return '';
+  const parts = [];
+  if (m.ttft != null) parts.push(`首 token ${m.ttft}s`);
+  if (m.tps) parts.push(`${m.tps} tok/s`);
+  if (m.tokens) parts.push(`${m.tokens} tokens`);
+  if (m.total) parts.push(`共 ${m.total}s`);
+  return parts.join(' · ');
+}
+
+function appendUserMsg(text, images = []) {
   const el = document.getElementById('chat-messages');
   const div = document.createElement('div');
-  div.className = 'msg ' + role;
-  if (role === 'bot') div.appendChild(renderMd(text));
-  else div.textContent = text;
+  div.className = 'msg user';
+  div.textContent = text;
   images.forEach(src => {
     const img = document.createElement('img');
     img.src = src; img.className = 'att';
     div.appendChild(img);
   });
+  el.appendChild(div);
+  el.scrollTop = el.scrollHeight;
+}
+
+function appendBotMsg(content, reasoning, searchResults = [], metrics = null) {
+  const el = document.getElementById('chat-messages');
+  const div = document.createElement('div');
+  div.className = 'msg bot';
   if (searchResults.length > 0) {
-    const d = document.createElement('details');
-    const s = document.createElement('summary');
-    s.textContent = `搜索到 ${searchResults.length} 条结果`;
-    d.appendChild(s);
-    searchResults.forEach((r, i) => {
-      const item = document.createElement('div');
-      item.className = 'search-item';
-      const link = document.createElement('a');
-      link.href = r.href; link.target = '_blank'; link.rel = 'noopener';
-      link.textContent = `[${i+1}] ${r.title || r.href}`;
-      const snippet = document.createElement('div');
-      snippet.className = 'snippet';
-      snippet.textContent = (r.body || '').slice(0, 150);
-      item.appendChild(link); item.appendChild(snippet);
-      d.appendChild(item);
-    });
+    const d = makeDetails('search', '', false);
+    fillSearchBlock(d, searchResults);
     div.appendChild(d);
   }
   if (reasoning) {
-    const d = document.createElement('details');
-    const s = document.createElement('summary');
-    s.textContent = '思考过程';
-    const inner = document.createElement('div');
-    inner.textContent = reasoning;
-    d.appendChild(s); d.appendChild(inner);
+    const d = makeDetails('thinking', '思考过程', false);
+    const body = document.createElement('div');
+    body.textContent = reasoning;
+    d.appendChild(body);
     div.appendChild(d);
+  }
+  div.appendChild(renderMd(content));
+  if (metrics) {
+    const m = document.createElement('div');
+    m.className = 'metrics';
+    m.textContent = metricsText(metrics);
+    div.appendChild(m);
   }
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
+  return div;
 }
 
 function refreshChatModels() {
@@ -255,31 +323,166 @@ async function sendChat() {
   input.value = '';
   const { content, images } = buildUserContent(text || '请分析这张图片/这份文件');
   attachments = []; renderChips();
-  appendMsg('user', typeof content === 'string' ? content : text, null, images);
+  appendUserMsg(typeof content === 'string' ? content : text, images);
   chatHistory.push({ role: 'user', content });
-  const thinking = document.createElement('div');
-  thinking.className = 'msg bot';
-  thinking.textContent = '思考中...';
-  document.getElementById('chat-messages').appendChild(thinking);
+
+  const el = document.getElementById('chat-messages');
+  const bot = document.createElement('div');
+  bot.className = 'msg bot';
+  const searchDet = makeDetails('search', '搜索中...', true);
+  const thinkDet = makeDetails('thinking', '思考过程', true);
+  const thinkBody = document.createElement('div');
+  thinkDet.appendChild(thinkBody);
+  const contentDiv = document.createElement('div');
+  contentDiv.textContent = '思考中...';
+  const metricsDiv = document.createElement('div');
+  metricsDiv.className = 'metrics';
+  const wantSearch = document.getElementById('web-search').checked;
+  if (wantSearch) bot.appendChild(searchDet);
+  bot.appendChild(thinkDet);
+  bot.appendChild(contentDiv);
+  bot.appendChild(metricsDiv);
+  el.appendChild(bot);
+  el.scrollTop = el.scrollHeight;
+
+  const selectedModel = document.getElementById('chat-model').value || undefined;
+  const t0 = performance.now();
+  let ttft = null, accText = '', accReason = '', usage = null, searchResults = [];
+  let hasContent = false;
+
   try {
-    const data = await api('/api/chat', {
+    const resp = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        messages: chatHistory,
-        web_search: document.getElementById('web-search').checked,
-        model: document.getElementById('chat-model').value || undefined,
+        messages: chatHistory.map(m => ({ role: m.role, content: m.content })),
+        web_search: wantSearch,
+        model: selectedModel,
       }),
     });
-    thinking.remove();
-    appendMsg('bot', data.content || '(空回复)', data.reasoning, [], data.search_results || []);
-    chatHistory.push({ role: 'assistant', content: data.content });
+    if (!resp.ok) {
+      let detail = resp.statusText;
+      try { detail = (await resp.json()).detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') continue;
+        let j;
+        try { j = JSON.parse(payload); } catch { continue; }
+        if (j.error) throw new Error(j.error);
+        if (j.search_results) {
+          searchResults = j.search_results;
+          fillSearchBlock(searchDet, searchResults);
+          continue;
+        }
+        if (j.usage) { usage = j.usage; continue; }
+        const delta = (j.choices && j.choices[0] && j.choices[0].delta) || {};
+        const rc = delta.reasoning || delta.reasoning_content;
+        if (rc) {
+          accReason += rc;
+          thinkBody.textContent = accReason;
+          el.scrollTop = el.scrollHeight;
+        }
+        if (delta.content) {
+          if (ttft === null) ttft = (performance.now() - t0) / 1000;
+          if (!hasContent) { contentDiv.textContent = ''; hasContent = true; }
+          accText += delta.content;
+          contentDiv.innerHTML = '';
+          contentDiv.appendChild(renderMd(accText));
+          el.scrollTop = el.scrollHeight;
+        }
+      }
+    }
+    const total = (performance.now() - t0) / 1000;
+    const tokens = usage ? usage.completion_tokens : 0;
+    const genTime = ttft !== null ? total - ttft : total;
+    const metrics = {
+      ttft: ttft !== null ? ttft.toFixed(2) : null,
+      tps: tokens > 0 && genTime > 0.01 ? (tokens / genTime).toFixed(1) : null,
+      tokens, total: total.toFixed(1), model: selectedModel || '',
+    };
+    metricsDiv.textContent = metricsText(metrics);
+    searchDet.open = false;
+    thinkDet.open = false;
+    if (!hasContent) contentDiv.textContent = accText || '(空回复)';
+    const msg = { role: 'assistant', content: accText };
+    if (accReason) msg.reasoning = accReason;
+    if (searchResults.length) msg.search_results = searchResults;
+    msg.metrics = metrics;
+    chatHistory.push(msg);
+    saveChat();
   } catch (e) {
-    thinking.remove();
+    if (!hasContent) contentDiv.textContent = '请求失败: ' + e.message;
+    thinkDet.open = false;
+    searchDet.open = false;
     chatHistory.pop();
-    appendMsg('bot', '请求失败: ' + e.message);
   }
 }
+
+// ---- 对话持久化 ----
+async function saveChat() {
+  try {
+    const data = await api('/api/chats', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: currentChatId, messages: chatHistory }),
+    });
+    currentChatId = data.id;
+    refreshChatList();
+  } catch (e) { console.error('保存对话失败', e); }
+}
+
+async function refreshChatList(selectId) {
+  const sel = document.getElementById('chat-list');
+  try {
+    const data = await api('/api/chats');
+    sel.innerHTML = '<option value="">当前对话</option>' + data.chats.map(c =>
+      `<option value="${c.id}" ${c.id === (selectId || currentChatId) ? 'selected' : ''}>${c.title}</option>`
+    ).join('');
+  } catch (e) {}
+}
+
+async function loadChat(id) {
+  if (!id) return;
+  try {
+    const data = await api(`/api/chats/${id}`);
+    currentChatId = data.id;
+    chatHistory = data.messages || [];
+    document.getElementById('chat-messages').innerHTML = '';
+    chatHistory.forEach(m => {
+      if (m.role === 'user') {
+        const imgs = Array.isArray(m.content)
+          ? m.content.filter(p => p.type === 'image_url').map(p => p.image_url.url) : [];
+        const txt = Array.isArray(m.content)
+          ? m.content.filter(p => p.type === 'text').map(p => p.text).join(' ') : m.content;
+        appendUserMsg(txt, imgs);
+      } else if (m.role === 'assistant') {
+        appendBotMsg(m.content, m.reasoning, m.search_results || [], m.metrics);
+      }
+    });
+  } catch (e) { toast('加载对话失败: ' + e.message, true); }
+}
+
+function newChat() {
+  currentChatId = null;
+  chatHistory = [];
+  document.getElementById('chat-messages').innerHTML = '';
+  document.getElementById('chat-list').value = '';
+}
+
+refreshChatList();
 </script>
 
 <script>
