@@ -91,7 +91,16 @@
   .msg .md hr { border: none; border-top: 1px solid #30363d; margin: 12px 0; }
   .msg .md a { color: #a5d6ff; }
   .msg pre { background: #0a0c10; border: 1px solid #23272f; border-radius: 8px;
-             padding: 10px 12px; overflow-x: auto; margin: 8px 0; white-space: pre; }
+             padding: 10px 12px; overflow-x: auto; margin: 0; white-space: pre; }
+  .code-wrap { position: relative; margin: 8px 0; }
+  .copy-btn { background: none; border: none; padding: 2px; cursor: pointer; opacity: .45;
+              color: #9aa0aa; display: inline-flex; align-items: center; gap: 4px;
+              font-size: 11px; border-radius: 4px; }
+  .copy-btn:hover { opacity: 1; background: #21262d; }
+  .copy-btn.copied { color: #3fb950; opacity: 1; }
+  .code-wrap > .copy-btn { position: absolute; top: 6px; right: 6px; background: #171a21;
+                           border: 1px solid #30363d; }
+  .msg-actions { display: flex; gap: 8px; margin-top: 8px; }
   .msg code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; }
   .msg p > code, .msg li > code { background: #0a0c10; padding: 1px 5px; border-radius: 4px; }
   .msg table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
@@ -193,6 +202,53 @@ function toggleChat() {
 
 if (window.marked) marked.setOptions({ breaks: true, gfm: true });
 
+const COPY_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M5 2a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H5zm0 1.5h6a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5z"/><path d="M7.5 5.5a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1h-3zm0 2.5a.5.5 0 0 0 0 1h3a.5.5 0 0 0 0-1h-3z"/></svg>';
+const CHECK_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0z"/></svg>';
+
+async function copyText(text, btn) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
+  btn.innerHTML = CHECK_SVG;
+  btn.classList.add('copied');
+  setTimeout(() => { btn.innerHTML = COPY_SVG; btn.classList.remove('copied'); }, 1500);
+}
+
+function makeCopyBtn(getText) {
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.innerHTML = COPY_SVG;
+  btn.title = '拷贝';
+  btn.onclick = e => { e.stopPropagation(); copyText(getText(), btn); };
+  return btn;
+}
+
+function addCodeCopyButtons(mdDiv) {
+  mdDiv.querySelectorAll('pre').forEach(pre => {
+    if (pre.parentElement.classList.contains('code-wrap')) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'code-wrap';
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(pre);
+    wrap.appendChild(makeCopyBtn(() => pre.textContent));
+  });
+}
+
+function addMsgCopyAction(msgDiv, rawText) {
+  if (msgDiv.querySelector('.msg-actions')) return;
+  const bar = document.createElement('div');
+  bar.className = 'msg-actions';
+  bar.appendChild(makeCopyBtn(() => rawText));
+  msgDiv.appendChild(bar);
+}
+
 function renderMd(text, highlight = true) {
   const div = document.createElement('div');
   div.className = 'md';
@@ -201,6 +257,7 @@ function renderMd(text, highlight = true) {
     if (highlight && window.hljs) {
       div.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
     }
+    if (highlight) addCodeCopyButtons(div);
     return div;
   }
   div.textContent = text;
@@ -275,6 +332,7 @@ function appendBotMsg(content, reasoning, searchResults = [], metrics = null) {
     div.appendChild(d);
   }
   div.appendChild(renderMd(content));
+  addMsgCopyAction(div, content);
   if (metrics) {
     const m = document.createElement('div');
     m.className = 'metrics';
@@ -434,6 +492,7 @@ async function sendChat() {
     thinkDet.open = false;
     if (!hasContent) contentDiv.textContent = accText || '(空回复)';
     else { contentDiv.innerHTML = ''; contentDiv.appendChild(renderMd(accText, true)); }
+    addMsgCopyAction(bot, accText);
     const msg = { role: 'assistant', content: accText };
     if (accReason) msg.reasoning = accReason;
     if (searchResults.length) msg.search_results = searchResults;
