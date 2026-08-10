@@ -65,6 +65,10 @@
   .msg.bot details { margin-top: 6px; font-size: 12px; color: #9aa0aa; }
   .msg.bot summary { cursor: pointer; }
   .msg.bot details div { margin-top: 4px; padding-left: 8px; border-left: 2px solid #30363d; }
+  .search-item { margin: 6px 0; font-size: 12px; }
+  .search-item a { color: #58a6ff; text-decoration: none; }
+  .search-item a:hover { text-decoration: underline; }
+  .search-item .snippet { color: #9aa0aa; margin-top: 2px; }
   .msg img.att { max-width: 100%; border-radius: 8px; margin-top: 6px; display: block; }
   .msg pre { background: #0a0c10; border: 1px solid #23272f; border-radius: 8px;
              padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
@@ -155,7 +159,7 @@ function renderMd(text) {
   return div;
 }
 
-function appendMsg(role, text, reasoning, images = []) {
+function appendMsg(role, text, reasoning, images = [], searchResults = []) {
   const el = document.getElementById('chat-messages');
   const div = document.createElement('div');
   div.className = 'msg ' + role;
@@ -166,6 +170,25 @@ function appendMsg(role, text, reasoning, images = []) {
     img.src = src; img.className = 'att';
     div.appendChild(img);
   });
+  if (searchResults.length > 0) {
+    const d = document.createElement('details');
+    const s = document.createElement('summary');
+    s.textContent = `搜索到 ${searchResults.length} 条结果`;
+    d.appendChild(s);
+    searchResults.forEach((r, i) => {
+      const item = document.createElement('div');
+      item.className = 'search-item';
+      const link = document.createElement('a');
+      link.href = r.href; link.target = '_blank'; link.rel = 'noopener';
+      link.textContent = `[${i+1}] ${r.title || r.href}`;
+      const snippet = document.createElement('div');
+      snippet.className = 'snippet';
+      snippet.textContent = (r.body || '').slice(0, 150);
+      item.appendChild(link); item.appendChild(snippet);
+      d.appendChild(item);
+    });
+    div.appendChild(d);
+  }
   if (reasoning) {
     const d = document.createElement('details');
     const s = document.createElement('summary');
@@ -249,7 +272,7 @@ async function sendChat() {
       }),
     });
     thinking.remove();
-    appendMsg('bot', data.content || '(空回复)', data.reasoning);
+    appendMsg('bot', data.content || '(空回复)', data.reasoning, [], data.search_results || []);
     chatHistory.push({ role: 'assistant', content: data.content });
   } catch (e) {
     thinking.remove();

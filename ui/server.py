@@ -200,12 +200,13 @@ def chat(payload: dict):
         f"当前时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S %A')}。"
         "涉及「今天」「现在」「最近」等时间相关问题时，以此时间为准。"
     ]
+    search_results = []
     if payload.get("web_search"):
         query = extract_text(messages[-1].get("content", ""))
-        results = web_search(query)
+        search_results = web_search(query)
         context = "\n".join(
             f"[{i+1}] {r.get('title','')}\n{r.get('body','')}\n来源: {r.get('href','')}"
-            for i, r in enumerate(results)
+            for i, r in enumerate(search_results)
         )
         system_parts.append(
             "以下是与用户问题相关的最新网络搜索结果。请优先结合搜索结果回答，"
@@ -232,6 +233,10 @@ def chat(payload: dict):
     return {
         "content": (msg.get("content") or "").strip(),
         "reasoning": (msg.get("reasoning") or "").strip(),
+        "search_results": [
+            {"title": r.get("title", ""), "body": r.get("body", ""), "href": r.get("href", "")}
+            for r in search_results
+        ],
     }
 
 
