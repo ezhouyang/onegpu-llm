@@ -223,6 +223,14 @@
   </div>
 </div>
 
+<div class="modal-mask" id="serve-modal" onclick="if(event.target===this)closeModals()">
+  <div class="modal" style="width:640px;">
+    <h3 id="serve-title">对外服务</h3>
+    <div id="serve-body"></div>
+    <div class="modal-btns"><button onclick="closeModals()">关闭</button></div>
+  </div>
+</div>
+
 <div id="chat-panel">
   <div id="chat-resize"></div>
   <div id="chat-header">
@@ -708,6 +716,7 @@ function render() {
             : `<button onclick="downloadModel('${m.key}')">下载</button>`)
           : ''}
         <button onclick="openChatWith('${m.key}')" ${m.downloaded ? '' : 'disabled'}>对话</button>
+        <button onclick="showServe('${m.key}')">服务</button>
         <button onclick="showInfo('${m.key}')">信息</button>
         <button onclick="showLogs('${m.key}')" ${m.running ? '' : 'disabled'}>日志</button>
         ${m.api_ready ? `<button onclick="testApi()">冒烟测试</button>` : ''}
@@ -818,6 +827,76 @@ function openChatWith(key) {
 function closeModals() {
   document.getElementById('add-modal').classList.remove('open');
   document.getElementById('info-modal').classList.remove('open');
+  document.getElementById('serve-modal').classList.remove('open');
+}
+
+function showServe(key) {
+  const m = models.find(x => x.key === key);
+  if (!m) return;
+  const host = window.location.hostname;
+  const base = `http://${host}:8000/v1`;
+  const name = m.served_name;
+  const sections = [
+    ['API 端点', null,
+`Base URL:  ${base}
+可用接口:  POST ${base}/chat/completions
+           GET  ${base}/models
+模型名:    ${name}
+认证:      无需 API Key（如客户端强制要求，填任意字符串）`],
+    ['curl 示例', 'bash',
+`curl ${base}/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "model": "${name}",
+    "messages": [{"role": "user", "content": "你好"}]
+  }'`],
+    ['Python (openai SDK)', 'python',
+`from openai import OpenAI
+
+client = OpenAI(base_url="${base}", api_key="not-needed")
+resp = client.chat.completions.create(
+    model="${name}",
+    messages=[{"role": "user", "content": "你好"}],
+)
+print(resp.choices[0].message.content)`],
+    ['opencode 配置', 'json',
+`// ~/.config/opencode/opencode.json
+{
+  "provider": {
+    "onegpu": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "${base}" },
+      "models": { "${name}": {} }
+    }
+  },
+  "model": "onegpu/${name}"
+}`],
+  ];
+  document.getElementById('serve-title').textContent = `对外服务: ${key}` +
+    (m.api_ready ? '' : '（模型未运行，启动后可用）');
+  const body = document.getElementById('serve-body');
+  body.innerHTML = '';
+  sections.forEach(([title, lang, code]) => {
+    const h = document.createElement('div');
+    h.style.cssText = 'font-size:13px;color:#9aa0aa;margin:14px 0 6px;';
+    h.textContent = title;
+    const wrap = document.createElement('div');
+    wrap.className = 'code-wrap';
+    const pre = document.createElement('pre');
+    pre.style.margin = '0';
+    const codeEl = document.createElement('code');
+    codeEl.textContent = code;
+    if (lang && window.hljs) {
+      codeEl.className = 'language-' + lang;
+      hljs.highlightElement(codeEl);
+    }
+    pre.appendChild(codeEl);
+    wrap.appendChild(pre);
+    wrap.appendChild(makeCopyBtn(() => code));
+    body.appendChild(h);
+    body.appendChild(wrap);
+  });
+  document.getElementById('serve-modal').classList.add('open');
 }
 
 function openAddModal() {
