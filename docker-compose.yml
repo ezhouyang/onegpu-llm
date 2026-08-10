@@ -86,3 +86,16 @@ services:
       --max-model-len 16384
       --gpu-memory-utilization 0.85
       --limit-mm-per-prompt image=1
+
+  qwen3-8b:
+    <<: *vllm-base
+    container_name: vllm-qwen3-8b
+    profiles: ["qwen3-8b"]
+    command: >
+      --model /models/Qwen/Qwen3-8B-AWQ
+      --served-model-name qwen3-8b
+      --max-model-len 32768
+      --gpu-memory-utilization 0.9
+      --reasoning-parser deepseek_r1
+      --tool-call-parser hermes
+      --enable-auto-tool-choice

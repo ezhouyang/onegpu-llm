@@ -53,10 +53,7 @@ llm-deploy/
 1. **同一时间只跑一个模型**。切换模型 = 停掉当前 profile，启动另一个。
 2. **14B 以上模型必须用量化版**（优先官方 AWQ，其次社区 AWQ/GPTQ/FP8）。FP16 的 14B 就要 ~28GB，放不下。
 3. 所有服务统一监听 `8000` 端口，由「单模型运行」约束保证不冲突。
-4. 新增模型三步走：
-   - `scripts/download.sh` 的模型表里加一行（key = profile 名，value = ModelScope 模型 ID）
-   - `docker-compose.yml` 复制一个 service，改 `--model` 路径和 profile 名
-   - 更新本文件的模型清单
+4. 新增模型：优先用管理台「+ 添加模型」表单（自动写入 compose 和 download.sh）；手动方式 = download.sh 模型表加一行 + compose 复制一个 service
 5. 模型 ID 变动频繁（尤其社区量化版），下载失败时先去 modelscope.cn 搜同名模型确认 ID。
 
 ## 显存预算参考（4090 24GB，`--gpu-memory-utilization 0.92` ≈ 22.5GB 可用）

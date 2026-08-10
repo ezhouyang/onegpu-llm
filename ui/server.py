@@ -38,6 +38,8 @@ def load_models() -> dict[str, dict]:
         cmd = svc.get("command", "") or ""
         model_path = re.search(r"--model\s+(\S+)", cmd)
         served = re.search(r"--served-model-name\s+(\S+)", cmd)
+        max_len = re.search(r"--max-model-len\s+(\d+)", cmd)
+        util = re.search(r"--gpu-memory-utilization\s+([\d.]+)", cmd)
         rel = model_path.group(1).removeprefix("/models/") if model_path else ""
         local_path = MODELS_DIR / rel
         downloaded = local_path.is_dir() and any(local_path.rglob("*.safetensors"))
@@ -46,6 +48,12 @@ def load_models() -> dict[str, dict]:
             "container": svc.get("container_name", f"vllm-{key}"),
             "model_id": rel,
             "served_name": served.group(1) if served else key,
+            "max_model_len": int(max_len.group(1)) if max_len else None,
+            "gpu_memory_utilization": float(util.group(1)) if util else None,
+            "tool_call": "--tool-call-parser" in cmd,
+            "reasoning": "--reasoning-parser" in cmd,
+            "multimodal": "--limit-mm-per-prompt" in cmd,
+            "local_path": str(local_path),
             "downloaded": downloaded,
         }
     return models
@@ -123,6 +131,86 @@ def model_logs(key: str, tail: int = 100):
     if result.returncode != 0 and not text:
         text = f"(容器 {container} 不存在或未启动)"
     return {"logs": text}
+
+
+@app.get("/api/models/{key}/info")
+def model_info(key: str):
+    models = load_models()
+    if key not in models:
+        raise HTTPException(404, f"unknown model: {key}")
+    m = models[key]
+    local = Path(m["local_path"])
+    size_bytes = 0
+    file_count = 0
+    if local.is_dir():
+        for f in local.rglob("*"):
+            if f.is_file():
+                size_bytes += f.stat().st_size
+                file_count += 1
+    running = set(running_containers())
+    health = vllm_health()
+    return {
+        **m,
+        "running": m["container"] in running,
+        "api_ready": health["ready"] and m["served_name"] in health["served"],
+        "disk_size_gb": round(size_bytes / 1024**3, 2),
+        "file_count": file_count,
+        "api_base": f"http://localhost:{VLLM_PORT}/v1" if health["ready"] else None,
+    }
+
+
+@app.post("/api/models")
+def add_model(payload: dict):
+    key = (payload.get("key") or "").strip()
+    model_id = (payload.get("model_id") or "").strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", key):
+        raise HTTPException(400, "key 只能包含小写字母、数字、连字符")
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", model_id):
+        raise HTTPException(400, "model_id 格式应为 org/name（ModelScope 模型 ID）")
+    models = load_models()
+    if key in models:
+        raise HTTPException(400, f"profile {key} 已存在")
+    if any(m["model_id"] == model_id for m in models.values()):
+        raise HTTPException(400, f"模型 {model_id} 已存在")
+
+    max_len = int(payload.get("max_model_len") or 8192)
+    util = float(payload.get("gpu_memory_utilization") or 0.92)
+    cmd_lines = [
+        f"--model /models/{model_id}",
+        f"--served-model-name {key}",
+        f"--max-model-len {max_len}",
+        f"--gpu-memory-utilization {util}",
+    ]
+    if payload.get("reasoning"):
+        cmd_lines.append("--reasoning-parser deepseek_r1")
+    if payload.get("tool_call"):
+        cmd_lines.append("--tool-call-parser hermes\n      --enable-auto-tool-choice")
+    if payload.get("multimodal"):
+        cmd_lines.append("--limit-mm-per-prompt image=1")
+
+    service_block = (
+        f"\n  {key}:\n"
+        f"    <<: *vllm-base\n"
+        f"    container_name: vllm-{key}\n"
+        f"    profiles: [\"{key}\"]\n"
+        f"    command: >\n"
+        + "".join(f"      {line}\n" for line in cmd_lines)
+    )
+    with open(COMPOSE_FILE, "a") as f:
+        f.write(service_block)
+
+    download_sh = ROOT / "scripts" / "download.sh"
+    lines = download_sh.read_text().splitlines(keepends=True)
+    entry = f'  [{key}]="{model_id}"\n'
+    for i, line in enumerate(lines):
+        if line.rstrip() == ")" and any("declare -A MODELS" in l for l in lines[:i]):
+            lines.insert(i, entry)
+            break
+    else:
+        raise HTTPException(500, "无法在 download.sh 中定位模型表")
+    download_sh.write_text("".join(lines))
+
+    return {"ok": True, "key": key, "model_id": model_id}
 
 
 @app.post("/api/models/{key}/download")

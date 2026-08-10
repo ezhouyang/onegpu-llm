@@ -2,6 +2,16 @@
 
 本项目变更记录。格式：[版本] - 日期，分类：Added / Changed / Fixed。
 
+## [Unreleased]
+
+### Added
+- 管理台「+ 添加模型」表单：填写 profile / ModelScope ID / 显存与上下文参数 / 能力开关，自动写入 docker-compose.yml 和 download.sh
+- 模型卡片新增「对话」（打开对话面板并选中该模型）和「信息」（本地路径、磁盘占用、参数、API 地址等）按钮
+- 新增模型 qwen3-8b（轻量档）
+
+### Fixed
+- 对话历史下拉框刷新后不加载的真正修复（编辑落位错误，初始化改在 DOMContentLoaded）
+
 ## [0.2.0] - 2026-08-10
 
 ### Added
