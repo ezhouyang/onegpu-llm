@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>onegpu-llm</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11/styles/github-dark.min.css">
+<script src="https://cdn.jsdelivr.net/npm/marked@15/lib/marked.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11/lib/common.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -61,6 +65,22 @@
   .msg.bot details { margin-top: 6px; font-size: 12px; color: #9aa0aa; }
   .msg.bot summary { cursor: pointer; }
   .msg.bot details div { margin-top: 4px; padding-left: 8px; border-left: 2px solid #30363d; }
+  .msg img.att { max-width: 100%; border-radius: 8px; margin-top: 6px; display: block; }
+  .msg pre { background: #0a0c10; border: 1px solid #23272f; border-radius: 8px;
+             padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
+  .msg code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; }
+  .msg p > code, .msg li > code { background: #0a0c10; padding: 1px 5px; border-radius: 4px; }
+  .msg table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+  .msg th, .msg td { border: 1px solid #30363d; padding: 4px 10px; }
+  #chat-toolbar { padding: 8px 12px 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #chat-toolbar select { background: #0a0c10; border: 1px solid #30363d; border-radius: 6px;
+                         color: #e6e8eb; font-size: 12px; padding: 4px 8px; }
+  .toggle { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #9aa0aa;
+            cursor: pointer; user-select: none; }
+  #attach-row { padding: 4px 12px 0; display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { font-size: 11px; background: #21262d; border: 1px solid #30363d; border-radius: 10px;
+          padding: 2px 8px; display: flex; align-items: center; gap: 6px; }
+  .chip span.x { cursor: pointer; color: #f85149; }
   #chat-input-row { padding: 12px; border-top: 1px solid #23272f; display: flex; gap: 8px; }
   #chat-input { flex: 1; background: #0a0c10; border: 1px solid #30363d; border-radius: 8px;
                 color: #e6e8eb; padding: 8px 12px; font-size: 13px; font-family: inherit;
@@ -98,6 +118,15 @@
     <button onclick="toggleChat()">关闭</button>
   </div>
   <div id="chat-messages"></div>
+  <div id="chat-toolbar">
+    <select id="chat-model"></select>
+    <label class="toggle"><input type="checkbox" id="web-search"> 联网搜索</label>
+    <button onclick="document.getElementById('file-input').click()" title="添加图片或文本文件">附件</button>
+    <input type="file" id="file-input" hidden multiple
+      accept="image/*,.txt,.md,.markdown,.json,.csv,.py,.js,.ts,.html,.css,.yaml,.yml,.xml,.log"
+      onchange="handleFiles(this)">
+  </div>
+  <div id="attach-row"></div>
   <div id="chat-input-row">
     <textarea id="chat-input" placeholder="输入消息，Enter 发送（Shift+Enter 换行）"
       onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChat();}"></textarea>
@@ -107,16 +136,36 @@
 
 <script>
 let chatHistory = [];
+let attachments = [];
 
 function toggleChat() {
   document.getElementById('chat-panel').classList.toggle('open');
 }
 
-function appendMsg(role, text, reasoning) {
+function renderMd(text) {
+  if (window.marked && window.DOMPurify) {
+    const html = DOMPurify.sanitize(marked.parse(text));
+    const div = document.createElement('div');
+    div.innerHTML = html;
+    if (window.hljs) div.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
+    return div;
+  }
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div;
+}
+
+function appendMsg(role, text, reasoning, images = []) {
   const el = document.getElementById('chat-messages');
   const div = document.createElement('div');
   div.className = 'msg ' + role;
-  div.textContent = text;
+  if (role === 'bot') div.appendChild(renderMd(text));
+  else div.textContent = text;
+  images.forEach(src => {
+    const img = document.createElement('img');
+    img.src = src; img.className = 'att';
+    div.appendChild(img);
+  });
   if (reasoning) {
     const d = document.createElement('details');
     const s = document.createElement('summary');
@@ -130,13 +179,61 @@ function appendMsg(role, text, reasoning) {
   el.scrollTop = el.scrollHeight;
 }
 
+function refreshChatModels() {
+  const sel = document.getElementById('chat-model');
+  const cur = sel.value;
+  const downloaded = models.filter(m => m.downloaded);
+  const running = models.find(m => m.api_ready);
+  sel.innerHTML = downloaded.map(m => {
+    const label = m.served_name + (m.api_ready ? ' (运行中)' : m.running ? ' (启动中)' : ' (未运行)');
+    const selected = (running && m.key === running.key) || (!running && m.served_name === cur);
+    return `<option value="${m.served_name}" ${selected ? 'selected' : ''}>${label}</option>`;
+  }).join('') || '<option value="">(无已下载模型)</option>';
+}
+
+function handleFiles(input) {
+  [...input.files].forEach(f => {
+    if (f.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = () => { attachments.push({ kind: 'image', name: f.name, data: reader.result }); renderChips(); };
+      reader.readAsDataURL(f);
+    } else {
+      const reader = new FileReader();
+      reader.onload = () => { attachments.push({ kind: 'text', name: f.name, data: reader.result }); renderChips(); };
+      reader.readAsText(f);
+    }
+  });
+  input.value = '';
+}
+
+function renderChips() {
+  document.getElementById('attach-row').innerHTML = attachments.map((a, i) =>
+    `<span class="chip">${a.kind === 'image' ? '🖼' : '📄'} ${a.name}<span class="x" onclick="attachments.splice(${i},1);renderChips()">✕</span></span>`
+  ).join('');
+}
+
+function buildUserContent(text) {
+  let fullText = text;
+  const images = [];
+  attachments.forEach(a => {
+    if (a.kind === 'text') fullText += `\n\n--- 附件 ${a.name} ---\n\`\`\`\n${a.data.slice(0, 20000)}\n\`\`\``;
+    else images.push(a.data);
+  });
+  if (images.length === 0) return { content: fullText, images };
+  const content = [{ type: 'text', text: fullText }];
+  images.forEach(src => content.push({ type: 'image_url', image_url: { url: src } }));
+  return { content, images };
+}
+
 async function sendChat() {
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
-  if (!text) return;
+  if (!text && attachments.length === 0) return;
   input.value = '';
-  appendMsg('user', text);
-  chatHistory.push({ role: 'user', content: text });
+  const { content, images } = buildUserContent(text || '请分析这张图片/这份文件');
+  attachments = []; renderChips();
+  appendMsg('user', typeof content === 'string' ? content : text, null, images);
+  chatHistory.push({ role: 'user', content });
   const thinking = document.createElement('div');
   thinking.className = 'msg bot';
   thinking.textContent = '思考中...';
@@ -145,13 +242,18 @@ async function sendChat() {
     const data = await api('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: chatHistory }),
+      body: JSON.stringify({
+        messages: chatHistory,
+        web_search: document.getElementById('web-search').checked,
+        model: document.getElementById('chat-model').value || undefined,
+      }),
     });
     thinking.remove();
     appendMsg('bot', data.content || '(空回复)', data.reasoning);
     chatHistory.push({ role: 'assistant', content: data.content });
   } catch (e) {
     thinking.remove();
+    chatHistory.pop();
     appendMsg('bot', '请求失败: ' + e.message);
   }
 }
@@ -185,6 +287,7 @@ async function refreshModels() {
     const data = await api('/api/models');
     models = data.models;
     render();
+    if (window.refreshChatModels) refreshChatModels();
   } catch (e) { /* docker 暂时不可用时静默 */ }
 }
 

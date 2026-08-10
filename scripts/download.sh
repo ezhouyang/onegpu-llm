@@ -6,6 +6,7 @@ declare -A MODELS=(
   [qwen3-32b]="Qwen/Qwen3-32B-AWQ"
   [qwen3-30b-a3b]="Qwen/Qwen3-30B-A3B-Instruct-2507-AWQ"
   [qwen25-coder-32b]="Qwen/Qwen2.5-Coder-32B-Instruct-AWQ"
+  [gemma3-4b]="LLM-Research/gemma-3-4b-it"
 )
 
 usage() {

@@ -162,6 +162,27 @@ def download_status(key: str):
     return {"status": status, "log": log_text}
 
 
+def web_search(query: str, max_results: int = 5) -> list[dict]:
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        raise HTTPException(503, "搜索依赖未安装，请运行: ui/.venv/bin/pip install ddgs")
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+    except Exception as e:
+        raise HTTPException(502, f"搜索失败: {e}")
+    return results
+
+
+def extract_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+    return ""
+
+
 @app.post("/api/chat")
 def chat(payload: dict):
     messages = payload.get("messages", [])
@@ -170,8 +191,26 @@ def chat(payload: dict):
     health = vllm_health()
     if not health["ready"]:
         raise HTTPException(503, "没有正在运行的模型，请先启动")
+    model = payload.get("model") or health["served"][0]
+    if model not in health["served"]:
+        raise HTTPException(503, f"模型 {model} 未在运行，请先在控制台启动")
+
+    if payload.get("web_search"):
+        query = extract_text(messages[-1].get("content", ""))
+        results = web_search(query)
+        context = "\n".join(
+            f"[{i+1}] {r.get('title','')}\n{r.get('body','')}\n来源: {r.get('href','')}"
+            for i, r in enumerate(results)
+        )
+        search_note = (
+            "以下是与用户问题相关的最新网络搜索结果。请优先结合搜索结果回答，"
+            "回答时在引用处用上标标注来源编号（如 [1]），并在末尾列出「参考来源」清单。"
+            "如果搜索结果与问题无关，忽略它们。\n\n" + context
+        )
+        messages = [{"role": "system", "content": search_note}] + messages
+
     body = json.dumps({
-        "model": health["served"][0],
+        "model": model,
         "messages": messages,
         "max_tokens": 2048,
     }).encode()

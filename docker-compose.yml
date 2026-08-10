@@ -7,6 +7,7 @@ x-vllm-base: &vllm-base
   volumes:
     - ./models:/models
     - ./logs:/logs
+    - ./.cache/vllm:/root/.cache/vllm  # 编译缓存持久化，显著加快二次启动
   environment:
     - HF_HUB_OFFLINE=1
     - VLLM_LOGGING_LEVEL=INFO
@@ -74,3 +75,14 @@ services:
       --gpu-memory-utilization 0.92
       --tool-call-parser hermes
       --enable-auto-tool-choice
+
+  gemma3-4b:
+    <<: *vllm-base
+    container_name: vllm-gemma3-4b
+    profiles: ["gemma3-4b"]
+    command: >
+      --model /models/LLM-Research/gemma-3-4b-it
+      --served-model-name gemma3-4b
+      --max-model-len 16384
+      --gpu-memory-utilization 0.85
+      --limit-mm-per-prompt image=1

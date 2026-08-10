@@ -7,7 +7,7 @@
     <img src="https://img.shields.io/badge/engine-vLLM-green.svg" alt="Engine: vLLM">
     <img src="https://img.shields.io/badge/gpu-24GB%20VRAM-orange.svg" alt="GPU: 24GB VRAM">
   </p>
-  <p><a href="#中文说明">中文说明</a></p>
+  <p><b>English</b> · <a href="README.zh-CN.md">中文</a> · <a href="README.es.md">Español</a></p>
 </div>
 
 ---
@@ -21,9 +21,11 @@ Designed for personal AI toolchains: plug the local endpoint into [opencode](htt
 ## Features
 
 - **Web console** (`http://localhost:9000`): one-click model download with live progress, start/stop, container logs, real-time GPU stats (VRAM / utilization / temperature / power), built-in chat panel and smoke test (chat + tool calling)
+- **Chat panel**: multi-turn chat with model picker (defaults to the running model), Markdown/code rendering, image & text-file attachments (multimodal models supported), optional **web search** (free DuckDuckGo, no API key — results injected as grounded context to reduce hallucination, with source citations)
 - **One model at a time** by design — switching models is one click, the console stops the running one automatically (24GB VRAM can't hold two)
 - **Quantized-first model registry**: AWQ models tuned to fit 24GB, with per-model `max-model-len` budgets
 - **Tool calling ready**: Hermes parser + auto tool choice enabled out of the box, works with agentic coding tools
+- **Fast restarts**: vLLM compile cache is persisted to the workspace, warm restarts take ~70s
 - **Everything stays in the workspace**: weights, caches, logs — nothing leaks into `$HOME` or other drives
 
 ## Quick start
@@ -55,22 +57,49 @@ The OpenAI-compatible API listens on `http://localhost:8000/v1`.
 | `qwen3-32b` | Qwen/Qwen3-32B-AWQ | best single-GPU quality (slow, tight context) | ~19GB | 8192 |
 | `qwen3-30b-a3b` | Qwen/Qwen3-30B-A3B-Instruct-2507-AWQ | MoE, fast + near-32B quality | ~17GB | 16384 |
 | `qwen25-coder-32b` | Qwen/Qwen2.5-Coder-32B-Instruct-AWQ | coding agent backend | ~19GB | 8192 |
+| `gemma3-4b` | LLM-Research/gemma-3-4b-it | multimodal (image input), lightweight | ~8GB | 16384 |
 
-Adding a model = one line in `scripts/download.sh` + one service block in `docker-compose.yml`. Gemma 3 and other open models planned.
+Adding a model = one line in `scripts/download.sh` + one service block in `docker-compose.yml`. Gemma 3 27B (needs a community quant) and other open models planned.
+
+## Why vLLM instead of Ollama?
+
+| | onegpu-llm (vLLM) | Ollama |
+|---|---|---|
+| Throughput | PagedAttention + continuous batching, much higher under concurrency | serial per-request, batching limited |
+| Tool calling | first-class (`--tool-call-parser`), stable for agentic tools | varies by model/template |
+| Quantization | AWQ/GPTQ/FP8 — higher quality than GGUF at same VRAM | GGUF only |
+| Fine control | every engine flag exposed via compose (KV cache dtype, max len, mm limits…) | limited knobs |
+| Ease of use | needs Docker + some config (this repo handles it) | one-liner install, great for casual use |
+
+For a single-user coding-agent backend on one GPU, vLLM gives better quality-per-VRAM (AWQ) and more reliable tool calling; Ollama is simpler for quick experiments.
 
 ## opencode integration
 
+Add a provider pointing at the local endpoint in `~/.config/opencode/opencode.json`:
+
 ```json
 {
+  "$schema": "https://opencode.ai/config.json",
   "provider": {
     "onegpu": {
       "npm": "@ai-sdk/openai-compatible",
       "options": { "baseURL": "http://localhost:8000/v1" },
-      "models": { "qwen3-14b": {} }
+      "models": {
+        "qwen25-coder-32b": { "name": "Qwen2.5 Coder 32B (local)" },
+        "qwen3-14b": { "name": "Qwen3 14B (local)" }
+      }
     }
-  }
+  },
+  "model": "onegpu/qwen25-coder-32b"
 }
 ```
+
+Then run `opencode` and chat as usual — requests go to your GPU. Notes:
+
+- The served model name is set by `--served-model-name` in `docker-compose.yml`; keep it in sync with the `models` keys above
+- Start the matching profile first (`gemma3-4b` is multimodal — handy for screenshot-driven debugging)
+- For coding, `qwen25-coder-32b` is the recommended profile; tool calling is preconfigured
+- Same endpoint works with Cline / Continue / LibreChat: OpenAI-compatible base URL `http://localhost:8000/v1`, any API key string
 
 ## Project layout
 
@@ -140,17 +169,6 @@ Everything this project writes stays inside the workspace (weights, caches, logs
 
 ---
 
-## 中文说明
-
-在单张 24GB 消费级显卡（RTX 4090 实测，WSL2 + Docker Desktop）上部署开源大模型的一站式工作空间。vLLM 提供 OpenAI 兼容 API，自带 Web 管理台：模型下载（含实时进度）、一键启停切换、容器日志、GPU 实时监控、冒烟测试（对话 + 工具调用）。
-
-快速开始：
-
-```bash
-./scripts/download.sh qwen3-14b          # 下载模型（ModelScope，国内速度快）
-docker compose --profile qwen3-14b up -d # 启动服务
-./scripts/ui.sh                          # 管理台 http://localhost:9000
-./scripts/test.sh                        # 冒烟测试
-```
-
-API 地址 `http://localhost:8000/v1`，可直接接入 opencode / Cline / Continue 等工具。设计约束与运维约定见 `CLAUDE.md`。
+<div align="center">
+  中文文档请见 <a href="README.zh-CN.md">README.zh-CN.md</a> · Documentación en español: <a href="README.es.md">README.es.md</a>
+</div>

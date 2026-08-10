@@ -28,6 +28,8 @@ llm-deploy/
 - 启动：`./scripts/ui.sh`，浏览器访问 `http://localhost:9000`
 - 依赖装在 `ui/.venv`，不污染全局 Python 环境
 - 后端只做薄封装：模型信息以 `docker-compose.yml` 为唯一数据源（解析 profiles 和 command），不在 ui 里维护重复配置
+- 对话面板：模型选择默认当前运行模型；联网搜索用 DuckDuckGo（`ddgs` 包，免费无 Key），搜索结果注入 system prompt 让模型引用；图片附件以 base64 走 OpenAI 多模态格式，仅多模态模型可用
+- vLLM 编译缓存挂载在 `./.cache/vllm`，不要删（删了重启会重新编译，变慢）
 
 ## 存储位置约定（全部避开 C 盘）
 
@@ -66,6 +68,7 @@ llm-deploy/
 | qwen3-32b | Qwen/Qwen3-32B-AWQ | 单机质量上限（慢，上下文紧） | 待部署 |
 | qwen3-30b-a3b | Qwen/Qwen3-30B-A3B-Instruct-2507-AWQ | MoE，速度快质量接近32B | 待部署 |
 | qwen25-coder-32b | Qwen/Qwen2.5-Coder-32B-Instruct-AWQ | coding 专用，接 opencode | 待部署 |
+| gemma3-4b | LLM-Research/gemma-3-4b-it | 多模态（支持图片输入），轻量 | 待部署 |
 | gemma3-27b | （待定，需社区量化版） | 视觉/英文 | 规划中 |
 
 ## vLLM 参数约定
