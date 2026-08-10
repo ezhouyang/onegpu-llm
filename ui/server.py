@@ -3,6 +3,7 @@ import re
 import subprocess
 import time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -195,6 +196,10 @@ def chat(payload: dict):
     if model not in health["served"]:
         raise HTTPException(503, f"模型 {model} 未在运行，请先在控制台启动")
 
+    system_parts = [
+        f"当前时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S %A')}。"
+        "涉及「今天」「现在」「最近」等时间相关问题时，以此时间为准。"
+    ]
     if payload.get("web_search"):
         query = extract_text(messages[-1].get("content", ""))
         results = web_search(query)
@@ -202,12 +207,12 @@ def chat(payload: dict):
             f"[{i+1}] {r.get('title','')}\n{r.get('body','')}\n来源: {r.get('href','')}"
             for i, r in enumerate(results)
         )
-        search_note = (
+        system_parts.append(
             "以下是与用户问题相关的最新网络搜索结果。请优先结合搜索结果回答，"
-            "回答时在引用处用上标标注来源编号（如 [1]），并在末尾列出「参考来源」清单。"
-            "如果搜索结果与问题无关，忽略它们。\n\n" + context
+            "回答时在引用处标注来源编号（如 [1]），并在末尾列出「参考来源」清单。"
+            "如果搜索结果与问题无关，直接忽略它们，也不要列出参考来源。\n\n" + context
         )
-        messages = [{"role": "system", "content": search_note}] + messages
+    messages = [{"role": "system", "content": "\n\n".join(system_parts)}] + messages
 
     body = json.dumps({
         "model": model,
