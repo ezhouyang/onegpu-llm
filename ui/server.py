@@ -12,7 +12,10 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent_runtime import run_agent
+from context_manager import compress_if_needed, load_summary
 from mcp_manager import manager as mcp_manager
+import memory_store
+import skill_loader
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = ROOT / "docker-compose.yml"
@@ -292,7 +295,7 @@ def extract_text(content) -> str:
     return ""
 
 
-def build_chat_request(payload: dict) -> tuple[str, list, list]:
+def build_chat_request(payload: dict) -> tuple[str, list, list, dict | None]:
     messages = payload.get("messages", [])
     if not messages:
         raise HTTPException(400, "messages required")
@@ -303,10 +306,35 @@ def build_chat_request(payload: dict) -> tuple[str, list, list]:
     if model not in health["served"]:
         raise HTTPException(503, f"模型 {model} 未在运行，请先在控制台启动")
 
+    is_agent = bool(payload.get("_agent"))
+    chat_id = payload.get("chat_id")
+    models_cfg = load_models()
+    running_cfg = next((m for m in models_cfg.values() if m["served_name"] == model), {})
+    max_len = running_cfg.get("max_model_len") or 8192
+
+    compress_event = None
+    messages, compress_event = compress_if_needed(chat_id, model, messages, max_len)
+
     system_parts = [
         f"当前时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S %A')}。"
         "涉及「今天」「现在」「最近」等时间相关问题时，以此时间为准。"
     ]
+    mem = memory_store.digest(extract_text(messages[-1].get("content", "")))
+    if mem:
+        system_parts.append("以下是你记住的关于用户的信息：\n" + mem)
+    if is_agent:
+        skills = skill_loader.digest()
+        if skills:
+            system_parts.append(skills)
+        system_parts.append(
+            "你可以使用 memory__save 工具把值得长期记住的信息（用户偏好、重要事实、任务结论）保存下来。"
+        )
+    prev_summary = load_summary(chat_id)
+    if prev_summary and not compress_event:
+        # 摘要已在压缩时注入；未触发新压缩但存在历史摘要时补入
+        if not any(prev_summary[:50] in str(m.get("content", "")) for m in messages[:1]):
+            system_parts.append(f"（此前对话的压缩摘要）\n{prev_summary}")
+
     search_results = []
     if payload.get("web_search"):
         query = extract_text(messages[-1].get("content", ""))
@@ -321,7 +349,7 @@ def build_chat_request(payload: dict) -> tuple[str, list, list]:
             "如果搜索结果与问题无关，直接忽略它们，也不要列出参考来源。\n\n" + context
         )
     messages = [{"role": "system", "content": "\n\n".join(system_parts)}] + messages
-    return model, messages, search_results
+    return model, messages, search_results, compress_event
 
 
 def slim_results(results: list[dict]) -> list[dict]:
@@ -329,6 +357,55 @@ def slim_results(results: list[dict]) -> list[dict]:
         {"title": r.get("title", ""), "body": r.get("body", ""), "href": r.get("href", "")}
         for r in results
     ]
+
+
+@app.get("/api/memory")
+def memory_list():
+    return {"entries": memory_store.load()}
+
+
+@app.post("/api/memory")
+def memory_add(payload: dict):
+    try:
+        entry = memory_store.add(payload.get("content", ""), payload.get("type", "fact"), "manual")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "entry": entry}
+
+
+@app.post("/api/memory/{entry_id}/delete")
+def memory_delete(entry_id: str):
+    if not memory_store.remove(entry_id):
+        raise HTTPException(404, "entry not found")
+    return {"ok": True}
+
+
+@app.get("/api/skills")
+def skills_list():
+    return {"skills": [{k: s[k] for k in ("name", "description")} for s in skill_loader.scan()]}
+
+
+@app.get("/api/skills/{name}")
+def skill_read(name: str):
+    try:
+        content = skill_loader.read(name)
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    return {"name": name, "content": content}
+
+
+@app.post("/api/skills")
+def skill_write(payload: dict):
+    name = (payload.get("name") or "").strip()
+    description = (payload.get("description") or "").strip()
+    content = payload.get("content") or ""
+    if not name or not description:
+        raise HTTPException(400, "name 和 description 必填")
+    try:
+        skill_loader.write(name, description, content)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "name": name}
 
 
 @app.get("/api/mcp")
@@ -412,12 +489,17 @@ def mcp_toggle_server(name: str):
 
 @app.post("/api/chat/agent")
 def chat_agent(payload: dict):
+    payload["_agent"] = True
+
     def gen():
         try:
-            model, messages, _ = build_chat_request(payload)
+            model, messages, _, compress_event = build_chat_request(payload)
         except HTTPException as e:
             yield f"data: {json.dumps({'type': 'error', 'text': str(e.detail)}, ensure_ascii=False)}\n\n"
             return
+        if compress_event:
+            text = f"已压缩 {compress_event['compressed']} 条历史对话（保留最近 {compress_event['kept']} 条原文）"
+            yield f"data: {json.dumps({'type': 'notice', 'text': text}, ensure_ascii=False)}\n\n"
 
         import queue
         import threading
@@ -442,10 +524,13 @@ def chat_agent(payload: dict):
 def chat_stream(payload: dict):
     def gen():
         try:
-            model, messages, search_results = build_chat_request(payload)
+            model, messages, search_results, compress_event = build_chat_request(payload)
         except HTTPException as e:
             yield f"data: {json.dumps({'error': str(e.detail)})}\n\n"
             return
+        if compress_event:
+            ctext = f"已压缩 {compress_event['compressed']} 条历史对话（保留最近 {compress_event['kept']} 条原文）"
+            yield f"data: {json.dumps({'notice': ctext}, ensure_ascii=False)}\n\n"
         if search_results:
             yield f"data: {json.dumps({'search_results': slim_results(search_results)}, ensure_ascii=False)}\n\n"
         body = json.dumps({
@@ -473,7 +558,7 @@ def chat_stream(payload: dict):
 
 @app.post("/api/chat")
 def chat(payload: dict):
-    model, messages, search_results = build_chat_request(payload)
+    model, messages, search_results, _ = build_chat_request(payload)
     body = json.dumps({
         "model": model,
         "messages": messages,

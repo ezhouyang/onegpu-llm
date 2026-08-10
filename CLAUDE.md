@@ -41,6 +41,10 @@ llm-deploy/
 - MCP 配置 `mcp.json`：`{servers: {name: {type: local|remote, command[]/url, env, enabled}}}`，格式对齐 opencode/Claude
 - 管理台 MCP 分区可图形化增删/启停；单个 server 故障只降级不影响整体
 - 工具命名空间 `{server}__{tool}`；外部（天气）和家用（打印机）设备走同一机制
+- 内置工具：`skills__read`（读技能全文）、`memory__save`（模型主动存记忆），不占 MCP 名额
+- 记忆：`memory/memory.json`（偏好/事实/结论），每轮注入相关条目（最近 10 + 关键词命中），管理台「记忆」分区可增删
+- 技能：`skills/<name>/SKILL.md`（frontmatter name/description），渐进披露；管理台「Skills」分区可建/改
+- 上下文压缩：token 估算超 `max_model_len × 0.65` 时，最旧历史交模型摘要（保留最近 6 条原文），摘要存 `chats/_summary_<chat_id>.json` 滚动累积
 - 架构设计详见 `docs/architecture.md`（仅本地）
 
 ## 管理界面

@@ -180,6 +180,8 @@
   <div class="tabs">
     <div class="tab active" onclick="switchTab('models', this)">模型</div>
     <div class="tab" onclick="switchTab('mcp', this)">MCP</div>
+    <div class="tab" onclick="switchTab('memory', this)">记忆</div>
+    <div class="tab" onclick="switchTab('skills', this)">Skills</div>
   </div>
 
   <div class="page active" id="page-models">
@@ -195,6 +197,27 @@
       <button onclick="reloadMcp()">重新连接</button>
     </div>
     <div class="grid" id="mcp-servers"></div>
+  </div>
+
+  <div class="page" id="page-memory">
+    <div style="margin-bottom:16px;display:flex;gap:8px;">
+      <select id="mem-type" style="background:#0a0c10;border:1px solid #30363d;border-radius:6px;color:#e6e8eb;padding:6px 10px;">
+        <option value="fact">事实</option>
+        <option value="preference">偏好</option>
+        <option value="conclusion">结论</option>
+      </select>
+      <input type="text" id="mem-content" placeholder="手动添加一条记忆，如：用户偏好简洁的中文回答"
+        style="flex:1;background:#0a0c10;border:1px solid #30363d;border-radius:6px;color:#e6e8eb;padding:6px 10px;">
+      <button class="primary" onclick="addMemory()">添加</button>
+    </div>
+    <div id="memory-list"></div>
+  </div>
+
+  <div class="page" id="page-skills">
+    <div style="margin-bottom:16px;">
+      <button class="primary" onclick="openSkillModal()">+ 新建技能</button>
+    </div>
+    <div class="grid" id="skills-list"></div>
   </div>
 
   <div id="log-panel">
@@ -285,6 +308,28 @@
     <div class="modal-btns">
       <button onclick="closeModals()">取消</button>
       <button class="primary" onclick="submitMcpAdd()">添加</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask" id="skill-modal" onclick="if(event.target===this)closeModals()">
+  <div class="modal" style="width:640px;">
+    <h3 id="skill-title">新建技能</h3>
+    <div class="form-row">
+      <label>技能名（小写字母/数字/连字符）</label>
+      <input type="text" id="skill-name" placeholder="code-review">
+    </div>
+    <div class="form-row">
+      <label>一句话描述（模型据此判断何时使用，务必写清触发场景）</label>
+      <input type="text" id="skill-desc" placeholder="代码审查：当用户要求 review 代码时，按团队规范检查">
+    </div>
+    <div class="form-row">
+      <label>技能正文（Markdown，读取全文时提供给模型）</label>
+      <textarea id="skill-content" rows="12" style="width:100%;background:#0a0c10;border:1px solid #30363d;border-radius:6px;color:#e6e8eb;padding:10px;font-size:13px;font-family:inherit;"></textarea>
+    </div>
+    <div class="modal-btns">
+      <button onclick="closeModals()">取消</button>
+      <button class="primary" onclick="submitSkill()">保存</button>
     </div>
   </div>
 </div>
@@ -576,6 +621,7 @@ async function sendChat() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: chatHistory.map(m => ({ role: m.role, content: m.content })),
+        chat_id: currentChatId,
         web_search: wantSearch,
         model: selectedModel,
       }),
@@ -602,6 +648,13 @@ async function sendChat() {
         let j;
         try { j = JSON.parse(payload); } catch { continue; }
         if (j.error) throw new Error(j.error);
+        if (j.notice) {
+          const item = document.createElement('div');
+          item.className = 'search-item';
+          item.textContent = '🗜 ' + j.notice;
+          thinkDet.parentElement.insertBefore(item, thinkDet);
+          continue;
+        }
         if (j.search_results) {
           searchResults = j.search_results;
           fillSearchBlock(searchDet, searchResults);
@@ -687,6 +740,7 @@ async function sendAgentChat() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         messages: chatHistory.map(m => ({ role: m.role, content: m.content })),
+        chat_id: currentChatId,
         model: document.getElementById('chat-model').value || undefined,
       }),
     });
@@ -1007,6 +1061,7 @@ function closeModals() {
   document.getElementById('info-modal').classList.remove('open');
   document.getElementById('serve-modal').classList.remove('open');
   document.getElementById('mcp-add-modal').classList.remove('open');
+  document.getElementById('skill-modal').classList.remove('open');
 }
 
 function showServe(key) {
@@ -1133,6 +1188,8 @@ async function showInfo(key) {
 refreshModels();
 refreshGpu();
 refreshMcp();
+refreshMemory();
+refreshSkills();
 setInterval(refreshModels, 5000);
 setInterval(refreshGpu, 3000);
 setInterval(refreshMcp, 10000);
@@ -1195,6 +1252,106 @@ async function toggleMcp(name) {
     toast(`${name} 已${data.enabled ? '启用' : '停用'}`);
     refreshMcp();
   } catch (e) { toast('操作失败: ' + e.message, true); }
+}
+
+// ---- 记忆 ----
+const MEM_TYPE_LABEL = { preference: '偏好', fact: '事实', conclusion: '结论' };
+
+async function refreshMemory() {
+  try {
+    const data = await api('/api/memory');
+    const el = document.getElementById('memory-list');
+    if (data.entries.length === 0) {
+      el.innerHTML = '<div style="color:#9aa0aa;font-size:13px;">暂无记忆。Agent 模式下模型会自动保存值得记住的信息，也可以手动添加。</div>';
+      return;
+    }
+    el.innerHTML = [...data.entries].reverse().map(e => `
+      <div class="card" style="margin-bottom:8px;padding:12px 16px;display:flex;align-items:center;gap:10px;">
+        <span class="badge gray">${MEM_TYPE_LABEL[e.type] || e.type}</span>
+        <span style="flex:1;font-size:13px;">${e.content}</span>
+        <span style="font-size:11px;color:#6e7681;">${new Date(e.created * 1000).toLocaleDateString()}</span>
+        <button class="danger" style="font-size:11px;padding:3px 8px;" onclick="deleteMemory('${e.id}')">删除</button>
+      </div>
+    `).join('');
+  } catch (e) {}
+}
+
+async function addMemory() {
+  const content = document.getElementById('mem-content').value.trim();
+  if (!content) return;
+  try {
+    await api('/api/memory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content, type: document.getElementById('mem-type').value }),
+    });
+    document.getElementById('mem-content').value = '';
+    toast('已添加记忆');
+    refreshMemory();
+  } catch (e) { toast('添加失败: ' + e.message, true); }
+}
+
+async function deleteMemory(id) {
+  try {
+    await api(`/api/memory/${id}/delete`, { method: 'POST' });
+    refreshMemory();
+  } catch (e) { toast('删除失败: ' + e.message, true); }
+}
+
+// ---- Skills ----
+async function refreshSkills() {
+  try {
+    const data = await api('/api/skills');
+    const el = document.getElementById('skills-list');
+    if (data.skills.length === 0) {
+      el.innerHTML = '<div style="color:#9aa0aa;font-size:13px;">暂无技能。技能是 SKILL.md 格式的指令文档，Agent 模式下模型按需读取。</div>';
+      return;
+    }
+    el.innerHTML = data.skills.map(s => `
+      <div class="card">
+        <h2>${s.name}</h2>
+        <div class="model-id">${s.description}</div>
+        <div class="actions"><button onclick="editSkill('${s.name}')">编辑</button></div>
+      </div>
+    `).join('');
+  } catch (e) {}
+}
+
+function openSkillModal(name, desc, content) {
+  document.getElementById('skill-title').textContent = name ? `编辑技能: ${name}` : '新建技能';
+  document.getElementById('skill-name').value = name || '';
+  document.getElementById('skill-name').disabled = !!name;
+  document.getElementById('skill-desc').value = desc || '';
+  document.getElementById('skill-content').value = content || '';
+  document.getElementById('skill-modal').classList.add('open');
+}
+
+async function editSkill(name) {
+  try {
+    const data = await api(`/api/skills/${name}`);
+    const skills = await api('/api/skills');
+    const desc = (skills.skills.find(s => s.name === name) || {}).description || '';
+    openSkillModal(name, desc, data.content);
+  } catch (e) { toast('读取失败: ' + e.message, true); }
+}
+
+async function submitSkill() {
+  const payload = {
+    name: document.getElementById('skill-name').value.trim(),
+    description: document.getElementById('skill-desc').value.trim(),
+    content: document.getElementById('skill-content').value,
+  };
+  if (!payload.name || !payload.description) { toast('技能名和描述必填', true); return; }
+  try {
+    await api('/api/skills', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    toast('已保存');
+    closeModals();
+    refreshSkills();
+  } catch (e) { toast('保存失败: ' + e.message, true); }
 }
 
 function openMcpAddModal() {

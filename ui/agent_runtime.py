@@ -4,9 +4,57 @@ import json
 import time
 import urllib.request
 
+import memory_store
+import skill_loader
+
 VLLM_PORT = 8000
 MAX_ITERATIONS = 5
 TOOL_RESULT_LIMIT = 4000
+
+INTERNAL_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "skills__read",
+            "description": "读取指定技能的完整说明文档。当用户任务与某个技能的描述匹配时调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "技能名"}},
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "memory__save",
+            "description": "保存值得长期记住的信息（用户偏好、重要事实、任务结论）。不要保存寒暄或临时信息。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "要记住的内容，一句话"},
+                    "type": {"type": "string", "enum": ["preference", "fact", "conclusion"]},
+                },
+                "required": ["content", "type"],
+            },
+        },
+    },
+]
+
+
+def call_internal_tool(name: str, args: dict) -> str:
+    if name == "skills__read":
+        try:
+            return skill_loader.read(args.get("name", ""))
+        except KeyError as e:
+            return str(e)
+    if name == "memory__save":
+        try:
+            entry = memory_store.add(args.get("content", ""), args.get("type", "fact"), "agent")
+            return f"已记住（{entry['type']}）：{entry['content']}"
+        except ValueError as e:
+            return f"保存失败: {e}"
+    raise RuntimeError(f"未知内置工具: {name}")
 
 
 def vllm_chat(model: str, messages: list, tools: list | None) -> dict:
@@ -29,7 +77,8 @@ def vllm_chat(model: str, messages: list, tools: list | None) -> dict:
 
 def run_agent(model: str, messages: list, mcp_manager, emit, max_iterations: int = MAX_ITERATIONS):
     """执行 agent 循环。emit(event_dict) 推送 SSE 事件。返回最终 assistant 消息。"""
-    tools, mapping = mcp_manager.all_tools_openai()
+    mcp_tools, mapping = mcp_manager.all_tools_openai(max_tools=10 - len(INTERNAL_TOOLS))
+    tools = INTERNAL_TOOLS + mcp_tools
     total_usage = {"prompt_tokens": 0, "completion_tokens": 0}
     iterations = 0
     t0 = time.time()
@@ -87,7 +136,12 @@ def run_agent(model: str, messages: list, mcp_manager, emit, max_iterations: int
             emit({"type": "tool_call", "name": full_name, "arguments": raw_args})
 
             server, tool = mapping.get(full_name, (None, None))
-            if server is None:
+            if full_name.startswith(("skills__", "memory__")):
+                try:
+                    result_text = call_internal_tool(full_name, args)
+                except Exception as e:
+                    result_text = f"工具执行失败: {e}"
+            elif server is None:
                 result_text = f"错误：未知工具 {full_name}"
             else:
                 try:
