@@ -11,6 +11,9 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from agent_runtime import run_agent
+from mcp_manager import manager as mcp_manager
+
 ROOT = Path(__file__).resolve().parent.parent
 COMPOSE_FILE = ROOT / "docker-compose.yml"
 MODELS_DIR = ROOT / "models"
@@ -20,6 +23,22 @@ VLLM_PORT = 8000
 app = FastAPI(title="llm-deploy manager")
 
 download_tasks: dict[str, dict] = {}
+
+
+@app.on_event("startup")
+def startup():
+    if not (ROOT / "mcp.json").is_file() and (ROOT / "mcp.example.json").is_file():
+        import shutil
+        shutil.copy(ROOT / "mcp.example.json", ROOT / "mcp.json")
+    try:
+        mcp_manager.start_all()
+    except Exception as e:
+        print(f"[mcp] startup error: {e}")
+
+
+@app.on_event("shutdown")
+def shutdown():
+    mcp_manager.shutdown()
 
 
 def run(cmd: list[str], timeout: int = 30) -> str:
@@ -310,6 +329,113 @@ def slim_results(results: list[dict]) -> list[dict]:
         {"title": r.get("title", ""), "body": r.get("body", ""), "href": r.get("href", "")}
         for r in results
     ]
+
+
+@app.get("/api/mcp")
+def mcp_status():
+    servers = []
+    for name, cfg in mcp_manager.configs.items():
+        servers.append({
+            "name": name,
+            "type": cfg.get("type", "local"),
+            "status": mcp_manager.statuses.get(name, "unknown"),
+            "error": mcp_manager.errors.get(name),
+            "enabled": cfg.get("enabled", True),
+            "command_or_url": " ".join(cfg.get("command", [])) or cfg.get("url", ""),
+            "tools": mcp_manager.tools.get(name, []),
+        })
+    return {"servers": servers}
+
+
+@app.post("/api/mcp/reload")
+def mcp_reload():
+    try:
+        mcp_manager.start_all()
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return {"ok": True}
+
+
+def _load_mcp_config() -> dict:
+    path = ROOT / "mcp.json"
+    if path.is_file():
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            pass
+    return {"servers": {}}
+
+
+def _save_mcp_config(data: dict):
+    (ROOT / "mcp.json").write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+@app.post("/api/mcp/servers")
+def mcp_add_server(payload: dict):
+    name = (payload.get("name") or "").strip()
+    stype = payload.get("type", "local")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name):
+        raise HTTPException(400, "name 只能包含小写字母、数字、连字符、下划线")
+    data = _load_mcp_config()
+    if name in data["servers"]:
+        raise HTTPException(400, f"server {name} 已存在")
+    if stype == "local":
+        command = payload.get("command", [])
+        if isinstance(command, str):
+            import shlex
+            command = shlex.split(command)
+        if not command:
+            raise HTTPException(400, "local 类型需要 command")
+        entry = {"type": "local", "command": command,
+                 "enabled": payload.get("enabled", True), "env": payload.get("env") or {}}
+    else:
+        url = (payload.get("url") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            raise HTTPException(400, "remote 类型需要 http(s) url")
+        entry = {"type": "remote", "url": url, "enabled": payload.get("enabled", True)}
+    data["servers"][name] = entry
+    _save_mcp_config(data)
+    mcp_reload()
+    return {"ok": True, "name": name}
+
+
+@app.post("/api/mcp/servers/{name}/toggle")
+def mcp_toggle_server(name: str):
+    data = _load_mcp_config()
+    if name not in data["servers"]:
+        raise HTTPException(404, f"unknown server: {name}")
+    data["servers"][name]["enabled"] = not data["servers"][name].get("enabled", True)
+    _save_mcp_config(data)
+    mcp_reload()
+    return {"ok": True, "enabled": data["servers"][name]["enabled"]}
+
+
+@app.post("/api/chat/agent")
+def chat_agent(payload: dict):
+    def gen():
+        try:
+            model, messages, _ = build_chat_request(payload)
+        except HTTPException as e:
+            yield f"data: {json.dumps({'type': 'error', 'text': str(e.detail)}, ensure_ascii=False)}\n\n"
+            return
+
+        import queue
+        import threading
+
+        q: queue.Queue = queue.Queue()
+
+        def work():
+            result = run_agent(model, messages, mcp_manager, q.put)
+            q.put({"type": "final", "message": result})
+
+        threading.Thread(target=work, daemon=True).start()
+        while True:
+            ev = q.get()
+            yield f"data: {json.dumps(ev, ensure_ascii=False, default=str)}\n\n"
+            if ev.get("type") in ("final", "error"):
+                break
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @app.post("/api/chat/stream")

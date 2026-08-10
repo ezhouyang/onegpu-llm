@@ -1,0 +1,10 @@
+{
+  "servers": {
+    "weather": {
+      "type": "local",
+      "command": ["ui/.venv/bin/python", "ui/demo_mcp_weather.py"],
+      "enabled": true,
+      "env": {}
+    }
+  }
+}

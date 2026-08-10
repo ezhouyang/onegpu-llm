@@ -4,9 +4,10 @@
 
 ## 变更与进度管理
 
-- `CHANGELOG.md`：所有功能变更、修复必须登记（分类 Added/Changed/Fixed），提交前更新
-- `ROADMAP.md`：待办按 P0/P1/P2 分级，完成一项移入 CHANGELOG；新想法先记这里再排期
+- `CHANGELOG.md` / `ROADMAP.md` / `docs/`：**仅本地，不进 git**（进度与架构属私有信息）
+- 所有功能变更、修复必须登记 CHANGELOG（分类 Added/Changed/Fixed）；待办进 ROADMAP 按 P0/P1/P2 分级
 - 版本号约定：功能批次升 minor（0.x.0），修复升 patch
+- 其他仅本地文件：`models/`、`chats/`、`memory/`、`skills/`、`mcp.json`、`logs/`、`.cache/`
 
 ## 目录约定
 
@@ -27,8 +28,20 @@ llm-deploy/
 │   └── requirements.txt
 ├── .cache/                # modelscope/pip/tmp 缓存，不进 git
 ├── chats/                 # 对话记录（每对话一个 JSON），不进 git
+├── docs/                  # 架构设计文档，仅本地
+├── memory/                # 长期记忆（二期），不进 git
+├── skills/                # SKILL.md 技能（二期），不进 git
+├── mcp.json               # MCP server 配置，不进 git（模板见 mcp.example.json）
 └── logs/                  # vLLM 及下载日志，不进 git
 ```
+
+## Agent 与 MCP
+
+- Agent 模式：对话面板「Agent」开关 → `/api/chat/agent`，vLLM 推理 + MCP 工具调用迭代（上限 5 轮，工具总数 ≤10）
+- MCP 配置 `mcp.json`：`{servers: {name: {type: local|remote, command[]/url, env, enabled}}}`，格式对齐 opencode/Claude
+- 管理台 MCP 分区可图形化增删/启停；单个 server 故障只降级不影响整体
+- 工具命名空间 `{server}__{tool}`；外部（天气）和家用（打印机）设备走同一机制
+- 架构设计详见 `docs/architecture.md`（仅本地）
 
 ## 管理界面
 

@@ -1,6 +1,12 @@
-models/
-logs/
-__pycache__/
-ui/.venv/
 .cache/
+CHANGELOG.md
 chats/
+docs/
+logs/
+mcp.json
+memory/
+models/
+__pycache__/
+ROADMAP.md
+skills/
+ui/.venv/

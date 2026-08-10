@@ -31,6 +31,15 @@
   .badge.gray { background: #23272f; color: #9aa0aa; }
   .badge.yellow { background: rgba(210,153,34,.15); color: #d29922; }
   .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid #23272f; }
+  .tab { padding: 8px 18px; font-size: 14px; cursor: pointer; color: #9aa0aa;
+         border-bottom: 2px solid transparent; }
+  .tab.active { color: #e6e8eb; border-bottom-color: #1f6feb; }
+  .page { display: none; }
+  .page.active { display: block; }
+  .tool-item { font-size: 12px; padding: 6px 0; border-top: 1px solid #23272f; }
+  .tool-item .mono { color: #a5d6ff; }
+  .tool-item .desc { color: #9aa0aa; margin-top: 2px; }
   @media (max-width: 768px) {
     header { padding: 14px 16px; }
     h1 { font-size: 16px; }
@@ -168,10 +177,26 @@
   </div>
 </header>
 <main>
-  <div style="margin-bottom:16px;">
-    <button class="primary" onclick="openAddModal()">+ 添加模型</button>
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('models', this)">模型</div>
+    <div class="tab" onclick="switchTab('mcp', this)">MCP</div>
   </div>
-  <div class="grid" id="models"></div>
+
+  <div class="page active" id="page-models">
+    <div style="margin-bottom:16px;">
+      <button class="primary" onclick="openAddModal()">+ 添加模型</button>
+    </div>
+    <div class="grid" id="models"></div>
+  </div>
+
+  <div class="page" id="page-mcp">
+    <div style="margin-bottom:16px;display:flex;gap:8px;">
+      <button class="primary" onclick="openMcpAddModal()">+ 添加 MCP Server</button>
+      <button onclick="reloadMcp()">重新连接</button>
+    </div>
+    <div class="grid" id="mcp-servers"></div>
+  </div>
+
   <div id="log-panel">
     <div id="log-header">
       <span id="log-title">日志</span>
@@ -231,6 +256,39 @@
   </div>
 </div>
 
+<div class="modal-mask" id="mcp-add-modal" onclick="if(event.target===this)closeModals()">
+  <div class="modal">
+    <h3>添加 MCP Server</h3>
+    <div class="form-row">
+      <label>名称（小写字母/数字/连字符，如 weather、printer）</label>
+      <input type="text" id="mcp-name" placeholder="weather">
+    </div>
+    <div class="form-row">
+      <label>类型</label>
+      <select id="mcp-type" onchange="document.getElementById('mcp-cmd-row').style.display=this.value==='local'?'block':'none';document.getElementById('mcp-url-row').style.display=this.value==='remote'?'block':'none';"
+        style="width:100%;background:#0a0c10;border:1px solid #30363d;border-radius:6px;color:#e6e8eb;padding:7px 10px;">
+        <option value="local">local（本地子进程，stdio）</option>
+        <option value="remote">remote（远程 URL，SSE）</option>
+      </select>
+    </div>
+    <div class="form-row" id="mcp-cmd-row">
+      <label>启动命令（如 npx -y @xxx/mcp-server 或 python server.py）</label>
+      <input type="text" id="mcp-command" placeholder="ui/.venv/bin/python ui/demo_mcp_weather.py">
+    </div>
+    <div class="form-row" id="mcp-url-row" style="display:none;">
+      <label>URL（http(s)://...）</label>
+      <input type="text" id="mcp-url" placeholder="http://192.168.1.100:8080/sse">
+    </div>
+    <div class="form-row form-checks">
+      <label><input type="checkbox" id="mcp-enabled" checked> 立即启用</label>
+    </div>
+    <div class="modal-btns">
+      <button onclick="closeModals()">取消</button>
+      <button class="primary" onclick="submitMcpAdd()">添加</button>
+    </div>
+  </div>
+</div>
+
 <div id="chat-panel">
   <div id="chat-resize"></div>
   <div id="chat-header">
@@ -242,6 +300,7 @@
   <div id="chat-toolbar">
     <select id="chat-model"></select>
     <label class="toggle"><input type="checkbox" id="web-search"> 联网搜索</label>
+    <label class="toggle" title="多步工具调用（MCP）"><input type="checkbox" id="agent-mode"> Agent</label>
     <button onclick="document.getElementById('file-input').click()" title="添加图片或文本文件">附件</button>
     <input type="file" id="file-input" hidden multiple
       accept="image/*,.txt,.md,.markdown,.json,.csv,.py,.js,.ts,.html,.css,.yaml,.yml,.xml,.log"
@@ -477,6 +536,7 @@ function buildUserContent(text) {
 }
 
 async function sendChat() {
+  if (document.getElementById('agent-mode').checked) return sendAgentChat();
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
   if (!text && attachments.length === 0) return;
@@ -589,6 +649,124 @@ async function sendChat() {
     if (!hasContent) contentDiv.textContent = '请求失败: ' + e.message;
     thinkDet.open = false;
     searchDet.open = false;
+    chatHistory.pop();
+  }
+}
+
+// ---- Agent 模式 ----
+async function sendAgentChat() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text && attachments.length === 0) return;
+  input.value = '';
+  const { content, images } = buildUserContent(text || '请分析这张图片/这份文件');
+  attachments = []; renderChips();
+  appendUserMsg(typeof content === 'string' ? content : text, images);
+  chatHistory.push({ role: 'user', content });
+
+  const el = document.getElementById('chat-messages');
+  const bot = document.createElement('div');
+  bot.className = 'msg bot';
+  const traceDet = makeDetails('search', 'Agent 执行中...', true);
+  bot.appendChild(traceDet);
+  const contentDiv = document.createElement('div');
+  contentDiv.textContent = '执行中...';
+  const metricsDiv = document.createElement('div');
+  metricsDiv.className = 'metrics';
+  bot.appendChild(contentDiv);
+  bot.appendChild(metricsDiv);
+  el.appendChild(bot);
+  el.scrollTop = el.scrollHeight;
+
+  const t0 = performance.now();
+  let steps = 0;
+
+  try {
+    const resp = await fetch('/api/chat/agent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: chatHistory.map(m => ({ role: m.role, content: m.content })),
+        model: document.getElementById('chat-model').value || undefined,
+      }),
+    });
+    if (!resp.ok) {
+      let detail = resp.statusText;
+      try { detail = (await resp.json()).detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith('data:')) continue;
+        let j;
+        try { j = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        if (j.type === 'error') throw new Error(j.text);
+        if (j.type === 'tool_call') {
+          steps++;
+          const item = document.createElement('div');
+          item.className = 'search-item';
+          item.innerHTML = `<span style="color:#d29922;">🔧 调用工具</span> <span class="mono">${j.name}</span>`;
+          const args = document.createElement('div');
+          args.className = 'snippet';
+          args.textContent = j.arguments;
+          item.appendChild(args);
+          traceDet.appendChild(item);
+          traceDet.querySelector('summary').textContent = `Agent 执行中（${steps} 步）...`;
+        } else if (j.type === 'tool_result') {
+          const item = document.createElement('div');
+          item.className = 'search-item';
+          item.innerHTML = `<span style="color:#3fb950;">✓ 结果</span> <span class="mono">${j.name}</span>`;
+          const prev = document.createElement('div');
+          prev.className = 'snippet';
+          prev.textContent = j.preview;
+          item.appendChild(prev);
+          traceDet.appendChild(item);
+        } else if (j.type === 'notice') {
+          const item = document.createElement('div');
+          item.className = 'search-item';
+          item.textContent = '⚠ ' + j.text;
+          traceDet.appendChild(item);
+        } else if (j.type === 'final') {
+          const m = j.message;
+          traceDet.open = false;
+          traceDet.querySelector('summary').textContent = steps > 0 ? `Agent 执行了 ${steps} 步工具调用` : 'Agent 直接回答（未用工具）';
+          contentDiv.innerHTML = '';
+          if (m && m.content) {
+            contentDiv.appendChild(renderMd(m.content, true));
+            if (m.reasoning) {
+              const thinkDet = makeDetails('thinking', '思考过程', false);
+              const tb = document.createElement('div');
+              tb.textContent = m.reasoning;
+              thinkDet.appendChild(tb);
+              bot.insertBefore(thinkDet, contentDiv);
+            }
+            const metrics = { ...(m.metrics || {}), total: ((performance.now() - t0) / 1000).toFixed(1) };
+            metricsDiv.textContent = metricsText(metrics) + (metrics.iterations ? ` · ${metrics.iterations} 轮迭代` : '');
+            addMsgCopyAction(bot, m.content);
+            const msg = { role: 'assistant', content: m.content };
+            if (m.reasoning) msg.reasoning = m.reasoning;
+            msg.metrics = metrics;
+            chatHistory.push(msg);
+            saveChat();
+          } else {
+            contentDiv.textContent = '(空回复)';
+          }
+        }
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+  } catch (e) {
+    contentDiv.textContent = '请求失败: ' + e.message;
+    traceDet.open = false;
     chatHistory.pop();
   }
 }
@@ -828,6 +1006,7 @@ function closeModals() {
   document.getElementById('add-modal').classList.remove('open');
   document.getElementById('info-modal').classList.remove('open');
   document.getElementById('serve-modal').classList.remove('open');
+  document.getElementById('mcp-add-modal').classList.remove('open');
 }
 
 function showServe(key) {
@@ -953,8 +1132,96 @@ async function showInfo(key) {
 
 refreshModels();
 refreshGpu();
+refreshMcp();
 setInterval(refreshModels, 5000);
 setInterval(refreshGpu, 3000);
+setInterval(refreshMcp, 10000);
+
+function switchTab(name, el) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+}
+
+// ---- MCP ----
+function mcpStatusBadge(s) {
+  const map = {
+    ok: '<span class="badge green">已连接</span>',
+    connecting: '<span class="badge yellow">连接中</span>',
+    failed: '<span class="badge" style="background:rgba(248,81,73,.15);color:#f85149;">失败</span>',
+    disabled: '<span class="badge gray">已停用</span>',
+  };
+  return map[s.status] || `<span class="badge gray">${s.status}</span>`;
+}
+
+async function refreshMcp() {
+  try {
+    const data = await api('/api/mcp');
+    const el = document.getElementById('mcp-servers');
+    if (data.servers.length === 0) {
+      el.innerHTML = '<div style="color:#9aa0aa;font-size:13px;">还没有 MCP Server，点上方按钮添加。外部工具（天气、家用设备等）接入后可在对话 Agent 模式中使用。</div>';
+      return;
+    }
+    el.innerHTML = data.servers.map(s => `
+      <div class="card">
+        <h2>${s.name} ${mcpStatusBadge(s)}</h2>
+        <div class="model-id">${s.type} · ${s.command_or_url}</div>
+        ${s.error ? `<div style="font-size:12px;color:#f85149;margin-bottom:8px;">${s.error}</div>` : ''}
+        ${s.tools.length > 0 ? `
+          <details style="margin-bottom:10px;font-size:12px;">
+            <summary style="cursor:pointer;color:#9aa0aa;">${s.tools.length} 个工具</summary>
+            ${s.tools.map(t => `<div class="tool-item"><span class="mono">${t.name}</span><div class="desc">${t.description || ''}</div></div>`).join('')}
+          </details>` : ''}
+        <div class="actions">
+          <button onclick="toggleMcp('${s.name}')">${s.enabled ? '停用' : '启用'}</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) {}
+}
+
+async function reloadMcp() {
+  toast('正在重连 MCP servers...');
+  try {
+    await api('/api/mcp/reload', { method: 'POST' });
+    refreshMcp();
+  } catch (e) { toast('重连失败: ' + e.message, true); }
+}
+
+async function toggleMcp(name) {
+  try {
+    const data = await api(`/api/mcp/servers/${name}/toggle`, { method: 'POST' });
+    toast(`${name} 已${data.enabled ? '启用' : '停用'}`);
+    refreshMcp();
+  } catch (e) { toast('操作失败: ' + e.message, true); }
+}
+
+function openMcpAddModal() {
+  document.getElementById('mcp-add-modal').classList.add('open');
+}
+
+async function submitMcpAdd() {
+  const type = document.getElementById('mcp-type').value;
+  const payload = {
+    name: document.getElementById('mcp-name').value.trim(),
+    type,
+    enabled: document.getElementById('mcp-enabled').checked,
+  };
+  if (type === 'local') payload.command = document.getElementById('mcp-command').value.trim();
+  else payload.url = document.getElementById('mcp-url').value.trim();
+  if (!payload.name || (!payload.command && !payload.url)) { toast('请填写名称和命令/URL', true); return; }
+  try {
+    await api('/api/mcp/servers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    toast(`已添加 ${payload.name}`);
+    closeModals();
+    refreshMcp();
+  } catch (e) { toast('添加失败: ' + e.message, true); }
+}
 </script>
 </body>
 </html>
