@@ -77,8 +77,21 @@
                         color: #e6e8eb; font-size: 12px; padding: 4px 8px; max-width: 180px; }
   details.live > summary { color: #8b949e; }
   .msg img.att { max-width: 100%; border-radius: 8px; margin-top: 6px; display: block; }
+  .msg .md { white-space: normal; line-height: 1.75; }
+  .msg .md > *:first-child { margin-top: 0; }
+  .msg .md > *:last-child { margin-bottom: 0; }
+  .msg .md p { margin: 8px 0; }
+  .msg .md ul, .msg .md ol { margin: 8px 0; padding-left: 22px; }
+  .msg .md li { margin: 4px 0; }
+  .msg .md h1, .msg .md h2, .msg .md h3, .msg .md h4 { margin: 14px 0 8px; line-height: 1.4; }
+  .msg .md h1 { font-size: 17px; } .msg .md h2 { font-size: 16px; }
+  .msg .md h3 { font-size: 15px; } .msg .md h4 { font-size: 14px; }
+  .msg .md blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid #30363d;
+                        color: #9aa0aa; }
+  .msg .md hr { border: none; border-top: 1px solid #30363d; margin: 12px 0; }
+  .msg .md a { color: #a5d6ff; }
   .msg pre { background: #0a0c10; border: 1px solid #23272f; border-radius: 8px;
-             padding: 10px 12px; overflow-x: auto; margin: 8px 0; }
+             padding: 10px 12px; overflow-x: auto; margin: 8px 0; white-space: pre; }
   .msg code { font-family: "JetBrains Mono", Consolas, monospace; font-size: 12px; }
   .msg p > code, .msg li > code { background: #0a0c10; padding: 1px 5px; border-radius: 4px; }
   .msg table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
@@ -178,15 +191,18 @@ function toggleChat() {
   });
 })();
 
-function renderMd(text) {
+if (window.marked) marked.setOptions({ breaks: true, gfm: true });
+
+function renderMd(text, highlight = true) {
+  const div = document.createElement('div');
+  div.className = 'md';
   if (window.marked && window.DOMPurify) {
-    const html = DOMPurify.sanitize(marked.parse(text));
-    const div = document.createElement('div');
-    div.innerHTML = html;
-    if (window.hljs) div.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
+    div.innerHTML = DOMPurify.sanitize(marked.parse(text));
+    if (highlight && window.hljs) {
+      div.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
+    }
     return div;
   }
-  const div = document.createElement('div');
   div.textContent = text;
   return div;
 }
@@ -400,7 +416,7 @@ async function sendChat() {
           if (!hasContent) { contentDiv.textContent = ''; hasContent = true; }
           accText += delta.content;
           contentDiv.innerHTML = '';
-          contentDiv.appendChild(renderMd(accText));
+          contentDiv.appendChild(renderMd(accText, false));
           el.scrollTop = el.scrollHeight;
         }
       }
@@ -417,6 +433,7 @@ async function sendChat() {
     searchDet.open = false;
     thinkDet.open = false;
     if (!hasContent) contentDiv.textContent = accText || '(空回复)';
+    else { contentDiv.innerHTML = ''; contentDiv.appendChild(renderMd(accText, true)); }
     const msg = { role: 'assistant', content: accText };
     if (accReason) msg.reasoning = accReason;
     if (searchResults.length) msg.search_results = searchResults;
